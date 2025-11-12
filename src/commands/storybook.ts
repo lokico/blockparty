@@ -9,147 +9,25 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const blockPartyRoot = resolve(__dirname, '..', '..')
 
-function generateStorybookEntry(blocks: BlockInfo[]): string {
+async function generateBlocksModule(blocks: BlockInfo[]): Promise<string> {
+  // Generate block imports
   const imports = blocks.map((block, idx) =>
-    `import Block${idx}, { Props as Props${idx} } from '${block.path.replace(/\\/g, '/')}'`
+    `import Block${idx} from '${block.path.replace(/\\/g, '/')}'`
   ).join('\n')
 
-  const blockConfigs = blocks.map((block, idx) => `
-  {
+  // Generate block configs
+  const blockConfigs = blocks.map((block, idx) => `  {
     name: '${block.name}',
     Component: Block${idx},
     propDefinitions: ${JSON.stringify(block.props)},
     description: ${JSON.stringify(block.description)}
-  }`).join(',')
+  }`).join(',\n')
 
-  return `
-import { StrictMode, useState, useEffect, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+  return `${imports}
 
-${imports}
-
-const blocks = [${blockConfigs}
+export const blocks = [
+${blockConfigs}
 ]
-
-const STORAGE_KEY = 'blockparty-state'
-
-function App() {
-  const [selectedBlock, setSelectedBlock] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      return saved ? JSON.parse(saved).selectedBlock ?? 0 : 0
-    } catch {
-      return 0
-    }
-  })
-
-  const [props, setProps] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      return saved ? JSON.parse(saved).props ?? {} : {}
-    } catch {
-      return {}
-    }
-  })
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedBlock, props }))
-    } catch (e) {
-      console.error('Failed to save state:', e)
-    }
-  }, [selectedBlock, props])
-
-  const currentBlock = blocks[selectedBlock]
-  const CurrentComponent = currentBlock.Component
-  const propDefinitions = currentBlock.propDefinitions
-
-  return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'system-ui, sans-serif' }}>
-      <aside style={{ width: '250px', borderRight: '1px solid #ddd', padding: '20px', overflow: 'auto' }}>
-        <h2 style={{ marginTop: 0 }}>🎉 Block Party</h2>
-
-        <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: '#666' }}>Blocks</h3>
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {blocks.map((block, idx) => (
-            <li key={idx}>
-              <button
-                onClick={() => {
-                  setSelectedBlock(idx)
-                  setProps({})
-                }}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  textAlign: 'left',
-                  border: 'none',
-                  background: selectedBlock === idx ? '#0066ff' : 'transparent',
-                  color: selectedBlock === idx ? 'white' : 'black',
-                  cursor: 'pointer',
-                  borderRadius: '4px',
-                  marginBottom: '4px'
-                }}
-              >
-                {block.name}
-              </button>
-            </li>
-          ))}
-        </ul>
-
-        {currentBlock.description && (
-          <div style={{ marginTop: '24px', padding: '12px', background: '#f5f5f5', borderRadius: '4px' }}>
-            <p style={{ fontSize: '12px', color: '#666', margin: 0, lineHeight: '1.5' }}>
-              {currentBlock.description}
-            </p>
-          </div>
-        )}
-
-        <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: '#666', marginTop: '32px' }}>Props</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {propDefinitions.length > 0 ? propDefinitions.map(propDef => (
-            <div key={propDef.name}>
-              <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px', fontWeight: 500 }}>
-                {propDef.name}{propDef.optional ? '' : ' *'}
-                <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
-                  {propDef.type}
-                </span>
-              </label>
-              <input
-                type="text"
-                value={props[propDef.name] || ''}
-                onChange={(e) => setProps({ ...props, [propDef.name]: e.target.value })}
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  boxSizing: 'border-box'
-                }}
-                placeholder={\`Enter \${propDef.name}\`}
-              />
-            </div>
-          )) : (
-            <p style={{ fontSize: '12px', color: '#999' }}>No props defined</p>
-          )}
-        </div>
-      </aside>
-
-      <main style={{ flex: 1, padding: '40px', overflow: 'auto' }}>
-        <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-          <CurrentComponent {...props} />
-        </div>
-      </main>
-    </div>
-  )
-}
-
-const root = createRoot(document.getElementById('root')!)
-root.render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-)
 `
 }
 
@@ -173,12 +51,13 @@ export async function startStorybook(targetPath: string) {
   })
   console.log()
 
-  // Create virtual storybook entry point
-  const storybookEntry = generateStorybookEntry(blocks)
+  // Generate blocks module
+  const blocksModule = await generateBlocksModule(blocks)
+  const templatesDir = resolve(__dirname, '..', 'templates')
 
   // Start Vite dev server
   const server = await createServer({
-    root: resolve(__dirname, '..'),
+    root: templatesDir,
     resolve: {
       alias: {
         'react': resolve(blockPartyRoot, 'node_modules/react'),
@@ -195,13 +74,13 @@ export async function startStorybook(targetPath: string) {
         name: 'blockparty-virtual',
         enforce: 'pre',
         resolveId(id) {
-          if (id === '/@blockparty/storybook') {
-            return '/@blockparty/storybook.tsx'
+          if (id === './blocks' || id === './blocks.ts') {
+            return '\0virtual:blocks.ts'
           }
         },
         load(id) {
-          if (id === '/@blockparty/storybook.tsx') {
-            return storybookEntry
+          if (id === '\0virtual:blocks.ts') {
+            return blocksModule
           }
         }
       },
