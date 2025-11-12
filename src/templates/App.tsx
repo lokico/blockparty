@@ -95,7 +95,7 @@ export function App() {
 
   const currentBlock = blocks[selectedBlock]
   const CurrentComponent = currentBlock.Component
-  const propDefinitions = currentBlock.propDefinitions
+  const propDefinitions: PropDefinition[] = currentBlock.propDefinitions
 
   useEffect(() => {
     try {
@@ -177,7 +177,7 @@ export function App() {
               </label>
               {isComplexType(propDef.type) ? (
                 <textarea
-                  value={formatValue(props[propDef.name], propDef.type)}
+                  value={props[propDef.name] || ''}
                   onChange={(e) => setProps({ ...props, [propDef.name]: e.target.value })}
                   style={{
                     width: '100%',
@@ -217,7 +217,7 @@ export function App() {
 
       <main style={{ flex: 1, padding: '40px', overflow: 'auto' }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-          <ErrorBoundary key={selectedBlock}>
+          <ErrorBoundary key={`${selectedBlock}-${JSON.stringify(props)}`}>
             <CurrentComponent {...parsedProps} />
           </ErrorBoundary>
         </div>
