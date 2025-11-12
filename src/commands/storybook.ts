@@ -1,5 +1,6 @@
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { realpathSync } from 'fs'
 import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { discoverBlocks, type BlockInfo } from '../discoverBlocks.js'
@@ -51,9 +52,12 @@ export async function startStorybook(targetPath: string) {
   })
   console.log()
 
-  // Generate blocks module
-  const blocksModule = await generateBlocksModule(blocks)
+  // Generate initial blocks module
+  let blocksModule = await generateBlocksModule(blocks)
   const templatesDir = resolve(__dirname, '..', 'templates')
+
+  // Resolve target path through symlinks for comparison
+  const realTargetPath = realpathSync(targetPath)
 
   // Start Vite dev server
   const server = await createServer({
@@ -81,6 +85,26 @@ export async function startStorybook(targetPath: string) {
         load(id) {
           if (id === '\0virtual:blocks.ts') {
             return blocksModule
+          }
+        },
+        async handleHotUpdate({ file, server }) {
+          // Check if the changed file is in the target directory (resolve through symlinks)
+          if (file.startsWith(realTargetPath)) {
+            console.log(`🔄 Block file changed: ${file}`)
+            // Re-discover blocks to get updated prop definitions
+            const updatedBlocks = await discoverBlocks(targetPath)
+            blocksModule = await generateBlocksModule(updatedBlocks)
+
+            // Invalidate the virtual module
+            const module = server.moduleGraph.getModuleById('\0virtual:blocks.ts')
+            if (module) {
+              server.moduleGraph.invalidateModule(module)
+            }
+
+            // Trigger HMR for the blocks module
+            server.ws.send({
+              type: 'full-reload'
+            })
           }
         }
       },

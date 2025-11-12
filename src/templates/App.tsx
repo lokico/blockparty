@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ErrorBoundary } from './ErrorBoundary'
+import { PropsEditor } from './PropsEditor'
 import { blocks } from './blocks'
 
 interface PropDefinition {
@@ -105,18 +106,30 @@ export function App() {
     }
   }, [selectedBlock, props])
 
-  // Initialize props with defaults when block changes
+  // Initialize props with defaults when block changes or prop definitions change
   useEffect(() => {
+    const validPropNames = new Set(propDefinitions.map(p => p.name))
+
+    // Remove props that no longer exist in the prop definitions
+    const filteredProps = Object.fromEntries(
+      Object.entries(props).filter(([key]) => validPropNames.has(key))
+    )
+
+    // Add default values for required props that don't have values
     const defaultProps = propDefinitions.reduce((acc: Record<string, string>, propDef) => {
-      if (!propDef.optional && !props[propDef.name]) {
+      if (!propDef.optional && !filteredProps[propDef.name]) {
         acc[propDef.name] = getDefaultValue(propDef.type, propDef.optional)
       }
       return acc
     }, {})
-    if (Object.keys(defaultProps).length > 0) {
-      setProps(prev => ({ ...defaultProps, ...prev }))
+
+    const newProps = { ...filteredProps, ...defaultProps }
+
+    // Only update if props actually changed
+    if (JSON.stringify(props) !== JSON.stringify(newProps)) {
+      setProps(newProps)
     }
-  }, [selectedBlock])
+  }, [selectedBlock, propDefinitions])
 
   const parsedProps = Object.fromEntries(
     Object.entries(props).map(([key, value]) => {
@@ -166,53 +179,11 @@ export function App() {
         )}
 
         <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: '#666', marginTop: '32px' }}>Props</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {propDefinitions.length > 0 ? propDefinitions.map(propDef => (
-            <div key={propDef.name}>
-              <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px', fontWeight: 500 }}>
-                {propDef.name}{propDef.optional ? '' : ' *'}
-                <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
-                  {propDef.type}
-                </span>
-              </label>
-              {isComplexType(propDef.type) ? (
-                <textarea
-                  value={props[propDef.name] || ''}
-                  onChange={(e) => setProps({ ...props, [propDef.name]: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '6px 8px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    fontFamily: 'monospace',
-                    boxSizing: 'border-box',
-                    minHeight: '100px',
-                    resize: 'vertical'
-                  }}
-                  placeholder={`Enter JSON for ${propDef.name}`}
-                />
-              ) : (
-                <input
-                  type="text"
-                  value={props[propDef.name] || ''}
-                  onChange={(e) => setProps({ ...props, [propDef.name]: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '6px 8px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    fontSize: '14px',
-                    boxSizing: 'border-box'
-                  }}
-                  placeholder={`Enter ${propDef.name}`}
-                />
-              )}
-            </div>
-          )) : (
-            <p style={{ fontSize: '12px', color: '#999' }}>No props defined</p>
-          )}
-        </div>
+        <PropsEditor
+          propDefinitions={propDefinitions}
+          props={props}
+          onPropsChange={setProps}
+        />
       </aside>
 
       <main style={{ flex: 1, padding: '40px', overflow: 'auto' }}>
