@@ -1,20 +1,108 @@
 #!/usr/bin/env node
 
 import { existsSync } from 'fs'
-import { readdir, stat } from 'fs/promises'
+import { readdir, readFile } from 'fs/promises'
 import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { createServer } from 'vite'
 import react from '@vitejs/plugin-react'
+import * as ts from 'typescript'
 
 // Get the directory where this CLI script is located
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const blockPartyRoot = resolve(__dirname, '..')
 
+interface PropDefinition {
+  name: string
+  type: string
+  optional: boolean
+}
+
 interface BlockInfo {
   name: string
   path: string
+  props: PropDefinition[]
+}
+
+async function extractPropsFromFile(filePath: string): Promise<PropDefinition[]> {
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      content,
+      ts.ScriptTarget.Latest,
+      true
+    )
+
+    let propsInterface: ts.InterfaceDeclaration | ts.TypeAliasDeclaration | null = null
+    const exportedTypes: (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] = []
+
+    function visit(node: ts.Node) {
+      // Look for exported interfaces or type aliases
+      if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
+        const isExported = node.modifiers?.some(
+          mod => mod.kind === ts.SyntaxKind.ExportKeyword
+        )
+
+        if (isExported) {
+          exportedTypes.push(node)
+
+          // If it's named "Props", use it
+          if (node.name.text === 'Props') {
+            propsInterface = node
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit)
+    }
+
+    visit(sourceFile)
+
+    // If no "Props" interface found but only one exported type, use that
+    if (!propsInterface && exportedTypes.length === 1) {
+      propsInterface = exportedTypes[0]
+    }
+
+    if (!propsInterface) {
+      return []
+    }
+
+    const props: PropDefinition[] = []
+
+    // Extract properties from interface or type alias
+    if (ts.isInterfaceDeclaration(propsInterface)) {
+      for (const member of propsInterface.members) {
+        if (ts.isPropertySignature(member) && member.name) {
+          const name = member.name.getText(sourceFile)
+          const optional = !!member.questionToken
+          const type = member.type ? member.type.getText(sourceFile) : 'any'
+
+          props.push({ name, type, optional })
+        }
+      }
+    } else if (ts.isTypeAliasDeclaration(propsInterface) && propsInterface.type) {
+      const typeNode = propsInterface.type
+
+      if (ts.isTypeLiteralNode(typeNode)) {
+        for (const member of typeNode.members) {
+          if (ts.isPropertySignature(member) && member.name) {
+            const name = member.name.getText(sourceFile)
+            const optional = !!member.questionToken
+            const type = member.type ? member.type.getText(sourceFile) : 'any'
+
+            props.push({ name, type, optional })
+          }
+        }
+      }
+    }
+
+    return props
+  } catch (error) {
+    console.error(`Error extracting props from ${filePath}:`, error)
+    return []
+  }
 }
 
 async function discoverBlocks(baseDir: string): Promise<BlockInfo[]> {
@@ -26,9 +114,13 @@ async function discoverBlocks(baseDir: string): Promise<BlockInfo[]> {
 
   if (hasIndexTs || hasIndexTsx) {
     // Current directory is a Block
+    const indexPath = hasIndexTsx ? join(baseDir, 'index.tsx') : join(baseDir, 'index.ts')
+    const props = await extractPropsFromFile(indexPath)
+
     blocks.push({
       name: 'Block',
-      path: baseDir
+      path: baseDir,
+      props
     })
     return blocks
   }
@@ -40,12 +132,19 @@ async function discoverBlocks(baseDir: string): Promise<BlockInfo[]> {
     for (const entry of entries) {
       if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
         const dirPath = join(baseDir, entry.name)
-        const hasIndex = existsSync(join(dirPath, 'index.ts')) || existsSync(join(dirPath, 'index.tsx'))
+        const indexTsPath = join(dirPath, 'index.ts')
+        const indexTsxPath = join(dirPath, 'index.tsx')
+        const hasIndexTs = existsSync(indexTsPath)
+        const hasIndexTsx = existsSync(indexTsxPath)
 
-        if (hasIndex) {
+        if (hasIndexTs || hasIndexTsx) {
+          const indexPath = hasIndexTsx ? indexTsxPath : indexTsPath
+          const props = await extractPropsFromFile(indexPath)
+
           blocks.push({
             name: entry.name,
-            path: dirPath
+            path: dirPath,
+            props
           })
         }
       }
@@ -164,7 +263,7 @@ function generateStorybookEntry(blocks: BlockInfo[]): string {
   {
     name: '${block.name}',
     Component: Block${idx},
-    Props: {} as Props${idx}
+    propDefinitions: ${JSON.stringify(block.props)}
   }`).join(',')
 
   return `
@@ -182,9 +281,7 @@ function App() {
 
   const currentBlock = blocks[selectedBlock]
   const CurrentComponent = currentBlock.Component
-
-  // Extract prop types from Props interface
-  const propKeys = Object.keys(currentBlock.Props)
+  const propDefinitions = currentBlock.propDefinitions
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'system-ui, sans-serif' }}>
@@ -220,15 +317,18 @@ function App() {
 
         <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: '#666', marginTop: '32px' }}>Props</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {propKeys.length > 0 ? propKeys.map(key => (
-            <div key={key}>
+          {propDefinitions.length > 0 ? propDefinitions.map(propDef => (
+            <div key={propDef.name}>
               <label style={{ display: 'block', fontSize: '12px', marginBottom: '4px', fontWeight: 500 }}>
-                {key}
+                {propDef.name}{propDef.optional ? '' : ' *'}
+                <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
+                  {propDef.type}
+                </span>
               </label>
               <input
                 type="text"
-                value={props[key] || ''}
-                onChange={(e) => setProps({ ...props, [key]: e.target.value })}
+                value={props[propDef.name] || ''}
+                onChange={(e) => setProps({ ...props, [propDef.name]: e.target.value })}
                 style={{
                   width: '100%',
                   padding: '6px 8px',
@@ -237,7 +337,7 @@ function App() {
                   fontSize: '14px',
                   boxSizing: 'border-box'
                 }}
-                placeholder={\`Enter \${key}\`}
+                placeholder={\`Enter \${propDef.name}\`}
               />
             </div>
           )) : (
