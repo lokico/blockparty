@@ -18,7 +18,8 @@ function generateStorybookEntry(blocks: BlockInfo[]): string {
   {
     name: '${block.name}',
     Component: Block${idx},
-    propDefinitions: ${JSON.stringify(block.props)}
+    propDefinitions: ${JSON.stringify(block.props)},
+    description: ${JSON.stringify(block.description)}
   }`).join(',')
 
   return `
@@ -94,6 +95,14 @@ function App() {
             </li>
           ))}
         </ul>
+
+        {currentBlock.description && (
+          <div style={{ marginTop: '24px', padding: '12px', background: '#f5f5f5', borderRadius: '4px' }}>
+            <p style={{ fontSize: '12px', color: '#666', margin: 0, lineHeight: '1.5' }}>
+              {currentBlock.description}
+            </p>
+          </div>
+        )}
 
         <h3 style={{ fontSize: '14px', textTransform: 'uppercase', color: '#666', marginTop: '32px' }}>Props</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>

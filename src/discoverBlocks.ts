@@ -2,51 +2,49 @@ import { existsSync } from 'fs'
 import { readdir, stat } from 'fs/promises'
 import { join, dirname, basename } from 'path'
 import { extractPropsFromFile, type PropDefinition } from './extractProps.js'
+import { parseReadmeMetadata } from './parseReadme.js'
 
 export interface BlockInfo {
   name: string
   path: string
   props: PropDefinition[]
+  description?: string
+}
+
+async function getBlockInfo(blockDir: string, indexPath?: string): Promise<BlockInfo | undefined> {
+  if (!indexPath) {
+    const indexTsPath = join(blockDir, 'index.ts')
+    const indexTsxPath = join(blockDir, 'index.tsx')
+    if (existsSync(indexTsxPath)) {
+      indexPath = indexTsxPath
+    } else if (existsSync(indexTsPath)) {
+      indexPath = indexTsPath
+    } else {
+      return undefined
+    }
+  }
+  const props = await extractPropsFromFile(indexPath)
+  const blockName = basename(blockDir)
+  const metadata = await parseReadmeMetadata(blockDir)
+
+  return {
+    name: metadata.name ?? blockName,
+    path: indexPath,
+    props,
+    description: metadata.description
+  }
 }
 
 export async function discoverBlocks(targetPath: string): Promise<BlockInfo[]> {
   const blocks: BlockInfo[] = []
 
-  // Check if the path is a file
-  const stats = await stat(targetPath)
+  const targetStat = await stat(targetPath)
+  const blockDir = targetStat.isFile() ? dirname(targetPath) : targetPath
+  const indexPath = targetStat.isFile() ? targetPath : undefined
 
-  if (stats.isFile()) {
-    // If it's a specific file, treat it as a single block
-    if (targetPath.endsWith('.ts') || targetPath.endsWith('.tsx')) {
-      const props = await extractPropsFromFile(targetPath)
-      const blockDir = dirname(targetPath)
-      const blockName = basename(blockDir)
-
-      blocks.push({
-        name: blockName,
-        path: targetPath,
-        props
-      })
-      return blocks
-    } else {
-      throw new Error(`File must be a .ts or .tsx file: ${targetPath}`)
-    }
-  }
-
-  // Otherwise, it's a directory - check if it's a Block itself
-  const hasIndexTs = existsSync(join(targetPath, 'index.ts'))
-  const hasIndexTsx = existsSync(join(targetPath, 'index.tsx'))
-
-  if (hasIndexTs || hasIndexTsx) {
-    // Current directory is a Block
-    const indexPath = hasIndexTsx ? join(targetPath, 'index.tsx') : join(targetPath, 'index.ts')
-    const props = await extractPropsFromFile(indexPath)
-
-    blocks.push({
-      name: 'Block',
-      path: indexPath,
-      props
-    })
+  const blockInfo = await getBlockInfo(blockDir, indexPath)
+  if (blockInfo) {
+    blocks.push(blockInfo)
     return blocks
   }
 
@@ -57,20 +55,10 @@ export async function discoverBlocks(targetPath: string): Promise<BlockInfo[]> {
     for (const entry of entries) {
       if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
         const dirPath = join(targetPath, entry.name)
-        const indexTsPath = join(dirPath, 'index.ts')
-        const indexTsxPath = join(dirPath, 'index.tsx')
-        const hasIndexTs = existsSync(indexTsPath)
-        const hasIndexTsx = existsSync(indexTsxPath)
+        const blockInfo = await getBlockInfo(dirPath)
 
-        if (hasIndexTs || hasIndexTsx) {
-          const indexPath = hasIndexTsx ? indexTsxPath : indexTsPath
-          const props = await extractPropsFromFile(indexPath)
-
-          blocks.push({
-            name: entry.name,
-            path: indexPath,
-            props
-          })
+        if (blockInfo) {
+          blocks.push(blockInfo)
         }
       }
     }
