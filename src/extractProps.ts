@@ -5,6 +5,19 @@ export interface PropDefinition {
   name: string
   type: string
   optional: boolean
+  properties?: PropDefinition[]  // For object types, the nested properties
+}
+
+function isFunctionType(typeNode: ts.TypeNode | undefined): boolean {
+  if (!typeNode) return false
+  if (ts.isFunctionTypeNode(typeNode)) return true
+
+  // Check if it's a parenthesized function type like: (x: number) => void
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    return isFunctionType(typeNode.type)
+  }
+
+  return false
 }
 
 function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropDefinition[] {
@@ -13,11 +26,26 @@ function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceF
   if (ts.isTypeLiteralNode(typeNode)) {
     for (const member of typeNode.members) {
       if (ts.isPropertySignature(member) && member.name) {
+        // Skip function-typed properties
+        if (isFunctionType(member.type)) {
+          continue
+        }
+
         const name = member.name.getText(sourceFile)
         const optional = !!member.questionToken
         const type = member.type ? member.type.getText(sourceFile) : 'any'
 
-        props.push({ name, type, optional })
+        const propDef: PropDefinition = { name, type, optional }
+
+        // If this property has a type, try to extract nested properties
+        if (member.type) {
+          const nestedProps = extractNestedProperties(member.type, sourceFile)
+          if (nestedProps.length > 0) {
+            propDef.properties = nestedProps
+          }
+        }
+
+        props.push(propDef)
       }
     }
   } else if (ts.isTypeReferenceNode(typeNode)) {
@@ -34,6 +62,29 @@ function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceF
   return props
 }
 
+function extractNestedProperties(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropDefinition[] {
+  // Handle array types - extract element type
+  if (ts.isArrayTypeNode(typeNode)) {
+    return extractNestedProperties(typeNode.elementType, sourceFile)
+  }
+
+  // Handle inline object types
+  if (ts.isTypeLiteralNode(typeNode)) {
+    return extractPropertiesFromType(typeNode, sourceFile)
+  }
+
+  // Handle type references
+  if (ts.isTypeReferenceNode(typeNode)) {
+    const typeName = typeNode.typeName.getText(sourceFile)
+    const typeDecl = findTypeDeclaration(sourceFile, typeName)
+    if (typeDecl) {
+      return extractPropertiesFromDeclaration(typeDecl, sourceFile)
+    }
+  }
+
+  return []
+}
+
 function extractPropertiesFromDeclaration(
   decl: ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
   sourceFile: ts.SourceFile
@@ -43,22 +94,52 @@ function extractPropertiesFromDeclaration(
   if (ts.isInterfaceDeclaration(decl)) {
     for (const member of decl.members) {
       if (ts.isPropertySignature(member) && member.name) {
+        // Skip function-typed properties
+        if (isFunctionType(member.type)) {
+          continue
+        }
+
         const name = member.name.getText(sourceFile)
         const optional = !!member.questionToken
         const type = member.type ? member.type.getText(sourceFile) : 'any'
 
-        props.push({ name, type, optional })
+        const propDef: PropDefinition = { name, type, optional }
+
+        // Try to extract nested properties
+        if (member.type) {
+          const nestedProps = extractNestedProperties(member.type, sourceFile)
+          if (nestedProps.length > 0) {
+            propDef.properties = nestedProps
+          }
+        }
+
+        props.push(propDef)
       }
     }
   } else if (ts.isTypeAliasDeclaration(decl) && decl.type) {
     if (ts.isTypeLiteralNode(decl.type)) {
       for (const member of decl.type.members) {
         if (ts.isPropertySignature(member) && member.name) {
+          // Skip function-typed properties
+          if (isFunctionType(member.type)) {
+            continue
+          }
+
           const name = member.name.getText(sourceFile)
           const optional = !!member.questionToken
           const type = member.type ? member.type.getText(sourceFile) : 'any'
 
-          props.push({ name, type, optional })
+          const propDef: PropDefinition = { name, type, optional }
+
+          // Try to extract nested properties
+          if (member.type) {
+            const nestedProps = extractNestedProperties(member.type, sourceFile)
+            if (nestedProps.length > 0) {
+              propDef.properties = nestedProps
+            }
+          }
+
+          props.push(propDef)
         }
       }
     }

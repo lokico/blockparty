@@ -4,6 +4,7 @@ interface PropDefinition {
   name: string
   type: string
   optional: boolean
+  properties?: PropDefinition[]
 }
 
 interface PropsEditorProps {
@@ -98,6 +99,7 @@ export function PropsEditor({ propDefinitions, props, onPropsChange }: PropsEdit
             type={propDef.type}
             value={props[propDef.name] || ''}
             onChange={(value) => updateProp(propDef.name, value)}
+            properties={propDef.properties}
           />
         )}
       </>
@@ -149,9 +151,10 @@ interface RichEditorProps {
   type: string
   value: string
   onChange: (value: string) => void
+  properties?: PropDefinition[]
 }
 
-function RichEditor({ type, value, onChange }: RichEditorProps) {
+function RichEditor({ type, value, onChange, properties }: RichEditorProps) {
   // Parse the current value
   let parsedValue: any
   try {
@@ -198,6 +201,7 @@ function RichEditor({ type, value, onChange }: RichEditorProps) {
                 type={elementType}
                 value={item}
                 onChange={(newValue) => updateItem(index, newValue)}
+                properties={properties}
               />
             </div>
             <button
@@ -234,7 +238,18 @@ function RichEditor({ type, value, onChange }: RichEditorProps) {
     )
   }
 
-  // Object type - just show JSON for now
+  // Object type - show rich editor if we have property definitions
+  if (properties && properties.length > 0) {
+    return (
+      <ObjectEditor
+        value={value}
+        onChange={onChange}
+        properties={properties}
+      />
+    )
+  }
+
+  // Fallback to JSON textarea for unknown object types
   return (
     <textarea
       value={value}
@@ -255,13 +270,63 @@ function RichEditor({ type, value, onChange }: RichEditorProps) {
   )
 }
 
+interface ObjectEditorProps {
+  value: string
+  onChange: (value: string) => void
+  properties: PropDefinition[]
+}
+
+function ObjectEditor({ value, onChange, properties }: ObjectEditorProps) {
+  let parsedValue: Record<string, any>
+  try {
+    parsedValue = value ? JSON.parse(value) : {}
+  } catch {
+    parsedValue = {}
+  }
+
+  const updateField = (fieldName: string, fieldValue: any) => {
+    const newObj = { ...parsedValue, [fieldName]: fieldValue }
+    onChange(JSON.stringify(newObj))
+  }
+
+  return (
+    <div style={{
+      border: '1px solid #ddd',
+      borderRadius: '4px',
+      padding: '8px',
+      background: '#fafafa',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px'
+    }}>
+      {properties.map(prop => (
+        <div key={prop.name}>
+          <label style={{ display: 'block', fontSize: '11px', marginBottom: '2px', fontWeight: 500 }}>
+            {prop.name}{prop.optional ? '' : ' *'}
+            <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
+              {prop.type}
+            </span>
+          </label>
+          <ItemEditor
+            type={prop.type}
+            value={parsedValue[prop.name]}
+            onChange={(newValue) => updateField(prop.name, newValue)}
+            properties={prop.properties}
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 interface ItemEditorProps {
   type: string
   value: any
   onChange: (value: any) => void
+  properties?: PropDefinition[]
 }
 
-function ItemEditor({ type, value, onChange }: ItemEditorProps) {
+function ItemEditor({ type, value, onChange, properties }: ItemEditorProps) {
   // For primitive types
   if (type === 'string') {
     return (
@@ -316,7 +381,24 @@ function ItemEditor({ type, value, onChange }: ItemEditorProps) {
     )
   }
 
-  // For object types, show JSON editor
+  // For object types with known properties, show structured editor
+  if (properties && properties.length > 0) {
+    return (
+      <ObjectEditor
+        value={typeof value === 'string' ? value : JSON.stringify(value)}
+        onChange={(newValue) => {
+          try {
+            onChange(JSON.parse(newValue))
+          } catch {
+            onChange(newValue)
+          }
+        }}
+        properties={properties}
+      />
+    )
+  }
+
+  // For unknown object types, show JSON editor
   return (
     <textarea
       value={typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
