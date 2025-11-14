@@ -1,6 +1,6 @@
 # Block Party
 
-Convention-based web components with optional bridging to native code for use in a web view.
+Easy, zero-config, convention-based React components.
 
 ## Hello, World
 

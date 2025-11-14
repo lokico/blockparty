@@ -1,7 +1,8 @@
 {
   "name": "blockparty",
   "version": "0.1.0",
-  "description": "Convention-based web components with optional bridging to native code",
+  "description": "Easy, zero-config, convention-based React components.",
+  "repository": "github:chkn/blockparty",
   "type": "module",
   "bin": {
     "blockparty": "./dist/cli.js"
@@ -37,9 +38,10 @@
     "test": "npm run build && node --test dist/**/*.test.js"
   },
   "keywords": [
-    "web-components",
+    "blocks",
     "react",
-    "storybook"
+    "storybook",
+    "components"
   ],
   "author": "",
   "license": "MIT",
