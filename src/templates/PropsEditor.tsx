@@ -15,7 +15,31 @@ interface PropsEditorProps {
 }
 
 const isComplexType = (type: string) => {
+  // String unions like "foo" | "bar" are not complex, they get a dropdown
+  if (isStringUnion(type)) {
+    return false
+  }
   return type.includes('[') || type.includes('{') || type.includes('|')
+}
+
+const isStringUnion = (type: string): boolean => {
+  // Check if it's a union of string literals: "foo" | "bar" | "baz"
+  if (!type.includes('|')) return false
+
+  // Split by | and check if all parts are string literals
+  const parts = type.split('|').map(p => p.trim())
+  return parts.every(part =>
+    (part.startsWith('"') && part.endsWith('"')) ||
+    (part.startsWith("'") && part.endsWith("'"))
+  )
+}
+
+const parseStringUnion = (type: string): string[] => {
+  return type.split('|').map(part => {
+    const trimmed = part.trim()
+    // Remove quotes
+    return trimmed.slice(1, -1)
+  })
 }
 
 const getDefaultValue = (type: string, optional: boolean) => {
@@ -35,6 +59,11 @@ const getDefaultValue = (type: string, optional: boolean) => {
 
   if (type === 'boolean') {
     return 'false'
+  }
+
+  if (isStringUnion(type)) {
+    const options = parseStringUnion(type)
+    return options[0] || ''
   }
 
   return ''
@@ -338,6 +367,29 @@ interface ItemEditorProps {
 }
 
 function ItemEditor({ value, onChange, propDef: { type, properties, optional} }: ItemEditorProps) {
+  // For string unions, show dropdown
+  if (isStringUnion(type)) {
+    const options = parseStringUnion(type)
+    return (
+      <select
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: '100%',
+          padding: '4px 6px',
+          border: '1px solid #ddd',
+          borderRadius: '3px',
+          fontSize: '12px'
+        }}
+      >
+        {optional && <option value="">-- Select --</option>}
+        {options.map(option => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    )
+  }
+
   // For primitive types
   if (type === 'string') {
     return (
