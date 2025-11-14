@@ -6,6 +6,7 @@ export interface PropDefinition {
   type: string
   optional: boolean
   properties?: PropDefinition[]  // For object types, the nested properties
+  description?: string  // JSDoc comment text
 }
 
 function isFunctionType(typeNode: ts.TypeNode | undefined): boolean {
@@ -18,6 +19,35 @@ function isFunctionType(typeNode: ts.TypeNode | undefined): boolean {
   }
 
   return false
+}
+
+function extractJSDocComment(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
+  const fullText = sourceFile.getFullText()
+  const commentRanges = ts.getLeadingCommentRanges(fullText, node.pos)
+
+  if (!commentRanges || commentRanges.length === 0) {
+    return undefined
+  }
+
+  // Loop backwards to find the last comment starting with "/**"
+  for (let i = commentRanges.length - 1; i >= 0; i--) {
+    const range = commentRanges[i]
+    const commentText = fullText.substring(range.pos, range.end)
+
+    if (commentText.startsWith('/**')) {
+      // Parse JSDoc comment
+      return commentText
+        .replace(/^\/\*\*/, '') // Remove opening /**
+        .replace(/\*\/$/, '')   // Remove closing */
+        .split('\n')
+        .map(line => line.trim().replace(/^\* ?/, '')) // Remove leading * from each line
+        .filter(line => line.length > 0) // Remove empty lines
+        .join(' ')
+        .trim()
+    }
+  }
+
+  return undefined
 }
 
 function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropDefinition[] {
@@ -36,6 +66,12 @@ function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceF
         const type = member.type ? member.type.getText(sourceFile) : 'any'
 
         const propDef: PropDefinition = { name, type, optional }
+
+        // Extract JSDoc comment if available
+        const description = extractJSDocComment(member, sourceFile)
+        if (description) {
+          propDef.description = description
+        }
 
         // If this property has a type, try to extract nested properties
         if (member.type) {
@@ -105,6 +141,12 @@ function extractPropertiesFromDeclaration(
 
         const propDef: PropDefinition = { name, type, optional }
 
+        // Extract JSDoc comment if available
+        const description = extractJSDocComment(member, sourceFile)
+        if (description) {
+          propDef.description = description
+        }
+
         // Try to extract nested properties
         if (member.type) {
           const nestedProps = extractNestedProperties(member.type, sourceFile)
@@ -130,6 +172,12 @@ function extractPropertiesFromDeclaration(
           const type = member.type ? member.type.getText(sourceFile) : 'any'
 
           const propDef: PropDefinition = { name, type, optional }
+
+          // Extract JSDoc comment if available
+          const description = extractJSDocComment(member, sourceFile)
+          if (description) {
+            propDef.description = description
+          }
 
           // Try to extract nested properties
           if (member.type) {

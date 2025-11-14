@@ -1,36 +1,8 @@
-import { resolve, dirname } from 'path'
-import { fileURLToPath } from 'url'
 import { realpathSync } from 'fs'
 import { createServer } from 'vite'
-import react from '@vitejs/plugin-react'
-import { discoverBlocks, type BlockInfo } from '../discoverBlocks.js'
-
-// Get the directory where this CLI script is located
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-const blockPartyRoot = resolve(__dirname, '..', '..')
-
-async function generateBlocksModule(blocks: BlockInfo[]): Promise<string> {
-  // Generate block imports
-  const imports = blocks.map((block, idx) =>
-    `import Block${idx} from '${block.path.replace(/\\/g, '/')}'`
-  ).join('\n')
-
-  // Generate block configs
-  const blockConfigs = blocks.map((block, idx) => `  {
-    name: '${block.name}',
-    Component: Block${idx},
-    propDefinitions: ${JSON.stringify(block.props)},
-    description: ${JSON.stringify(block.description)}
-  }`).join(',\n')
-
-  return `${imports}
-
-export const blocks = [
-${blockConfigs}
-]
-`
-}
+import { discoverBlocks } from '../discoverBlocks.js'
+import { generateBlocksModule } from '../generateBlocksModule.js'
+import { blockPartyRoot, templatesDir, getViteResolveConfig, getVitePlugins } from '../viteConfig.js'
 
 export async function startStorybook(targetPath: string) {
   console.log('🎉 Starting Block Party...')
@@ -54,7 +26,6 @@ export async function startStorybook(targetPath: string) {
 
   // Generate initial blocks module
   let blocksModule = await generateBlocksModule(blocks)
-  const templatesDir = resolve(__dirname, '..', 'templates')
 
   // Resolve target path through symlinks for comparison
   const realTargetPath = realpathSync(targetPath)
@@ -62,14 +33,7 @@ export async function startStorybook(targetPath: string) {
   // Start Vite dev server
   const server = await createServer({
     root: templatesDir,
-    resolve: {
-      alias: {
-        'react': resolve(blockPartyRoot, 'node_modules/react'),
-        'react-dom': resolve(blockPartyRoot, 'node_modules/react-dom'),
-        'react/jsx-runtime': resolve(blockPartyRoot, 'node_modules/react/jsx-runtime'),
-        'react/jsx-dev-runtime': resolve(blockPartyRoot, 'node_modules/react/jsx-dev-runtime')
-      }
-    },
+    resolve: getViteResolveConfig(),
     optimizeDeps: {
       include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime']
     },
@@ -108,7 +72,7 @@ export async function startStorybook(targetPath: string) {
           }
         }
       },
-      react()
+      ...getVitePlugins()
     ],
     server: {
       fs: {

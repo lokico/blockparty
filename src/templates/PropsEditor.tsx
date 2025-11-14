@@ -5,6 +5,7 @@ interface PropDefinition {
   type: string
   optional: boolean
   properties?: PropDefinition[]
+  description?: string
 }
 
 interface PropsEditorProps {
@@ -134,6 +135,11 @@ export function PropsEditor({ propDefinitions, props, onPropsChange }: PropsEdit
                 </button>
               )}
             </div>
+            {propDef.description && (
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px', fontStyle: 'italic' }}>
+                {propDef.description}
+              </div>
+            )}
             {renderPropEditor(propDef)}
           </div>
         )
@@ -309,6 +315,11 @@ function ObjectEditor({ value, onChange, properties }: ObjectEditorProps) {
               {prop.type}
             </span>
           </label>
+          {prop.description && (
+            <div style={{ fontSize: '10px', color: '#666', marginBottom: '2px', fontStyle: 'italic' }}>
+              {prop.description}
+            </div>
+          )}
           <ItemEditor
             propDef={prop}
             value={parsedValue[prop.name]}

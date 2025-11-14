@@ -119,13 +119,12 @@ export default (props: Props) => <div>Complex</div>
 
     const props = extractPropsFromSource(source)
 
-    assert.strictEqual(props.length, 3)
+    // callback is filtered out because it's a function type
+    assert.strictEqual(props.length, 2)
     assert.strictEqual(props[0].name, 'items')
     assert.strictEqual(props[0].type, 'string[]')
-    assert.strictEqual(props[1].name, 'callback')
-    assert.strictEqual(props[1].type, '(x: number) => void')
-    assert.strictEqual(props[2].name, 'config')
-    assert.strictEqual(props[2].type, '{ key: string }')
+    assert.strictEqual(props[1].name, 'config')
+    assert.strictEqual(props[1].type, '{ key: string }')
   })
 
   test('extracts props from default export parameter type (multiple types exported)', () => {
@@ -165,9 +164,189 @@ export default function Button({ label, onClick, disabled }: ButtonProps) {
 
     const props = extractPropsFromSource(source)
 
-    assert.strictEqual(props.length, 3)
+    // onClick is filtered out because it's a function type
+    assert.strictEqual(props.length, 2)
     assert.deepStrictEqual(props[0], { name: 'label', type: 'string', optional: false })
-    assert.deepStrictEqual(props[1], { name: 'onClick', type: '() => void', optional: false })
-    assert.deepStrictEqual(props[2], { name: 'disabled', type: 'boolean', optional: true })
+    assert.deepStrictEqual(props[1], { name: 'disabled', type: 'boolean', optional: true })
+  })
+
+  test('extracts JSDoc comments from interface props', () => {
+    const source = `
+export interface Props {
+  /**
+   * The user's name
+   */
+  name: string
+  /**
+   * The user's age in years
+   */
+  age: number
+  /** Optional flag */
+  optional?: boolean
+}
+
+export default ({ name, age }: Props) => <div>{name}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 3)
+    assert.strictEqual(props[0].name, 'name')
+    assert.strictEqual(props[0].description, "The user's name")
+    assert.strictEqual(props[1].name, 'age')
+    assert.strictEqual(props[1].description, "The user's age in years")
+    assert.strictEqual(props[2].name, 'optional')
+    assert.strictEqual(props[2].description, 'Optional flag')
+  })
+
+  test('extracts JSDoc comments from type alias props', () => {
+    const source = `
+export type Props = {
+  /**
+   * The title to display
+   */
+  title: string
+  /** Number of items */
+  count?: number
+}
+
+export default ({ title }: Props) => <div>{title}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 2)
+    assert.strictEqual(props[0].name, 'title')
+    assert.strictEqual(props[0].description, 'The title to display')
+    assert.strictEqual(props[1].name, 'count')
+    assert.strictEqual(props[1].description, 'Number of items')
+  })
+
+  test('ignores non-JSDoc comments', () => {
+    const source = `
+export interface Props {
+  // This is a regular comment
+  name: string
+  /* This is a block comment */
+  age: number
+  /**
+   * This is a JSDoc comment
+   */
+  optional?: boolean
+}
+
+export default ({ name, age }: Props) => <div>{name}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 3)
+    assert.strictEqual(props[0].description, undefined)
+    assert.strictEqual(props[1].description, undefined)
+    assert.strictEqual(props[2].description, 'This is a JSDoc comment')
+  })
+
+  test('extracts last JSDoc comment when multiple exist', () => {
+    const source = `
+export interface Props {
+  /**
+   * First comment
+   */
+  /* Regular block comment */
+  /**
+   * Second comment (should be used)
+   */
+  name: string
+}
+
+export default ({ name }: Props) => <div>{name}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props[0].description, 'Second comment (should be used)')
+  })
+
+  test('handles props without JSDoc comments', () => {
+    const source = `
+export interface Props {
+  /**
+   * Has a comment
+   */
+  commented: string
+  notCommented: number
+}
+
+export default ({ commented }: Props) => <div>{commented}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 2)
+    assert.strictEqual(props[0].description, 'Has a comment')
+    assert.strictEqual(props[1].description, undefined)
+  })
+
+  test('filters out function-typed props', () => {
+    const source = `
+export interface Props {
+  /**
+   * A regular string prop
+   */
+  name: string
+  /**
+   * A function prop (should be filtered)
+   */
+  onClick: () => void
+  /**
+   * Another function (should be filtered)
+   */
+  onHover: (x: number) => void
+}
+
+export default ({ name }: Props) => <div>{name}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props[0].name, 'name')
+    assert.strictEqual(props[0].description, 'A regular string prop')
+  })
+
+  test('extracts nested properties with descriptions', () => {
+    const source = `
+export interface Config {
+  /**
+   * API key
+   */
+  apiKey: string
+  /**
+   * Timeout in milliseconds
+   */
+  timeout: number
+}
+
+export interface Props {
+  /**
+   * Configuration object
+   */
+  config: Config
+}
+
+export default ({ config }: Props) => <div>{config.apiKey}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props[0].name, 'config')
+    assert.strictEqual(props[0].description, 'Configuration object')
+    assert.strictEqual(props[0].properties?.length, 2)
+    assert.strictEqual(props[0].properties?.[0].name, 'apiKey')
+    assert.strictEqual(props[0].properties?.[0].description, 'API key')
+    assert.strictEqual(props[0].properties?.[1].name, 'timeout')
+    assert.strictEqual(props[0].properties?.[1].description, 'Timeout in milliseconds')
   })
 })
