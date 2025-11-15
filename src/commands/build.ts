@@ -1,33 +1,15 @@
 import { resolve } from 'path'
 import { mkdir, writeFile, rm } from 'fs/promises'
 import { build as viteBuild } from 'vite'
-import { discoverBlocks } from '../discoverBlocks.js'
-import { generateBlocksModule } from '../generateBlocksModule.js'
 import { templatesDir, getViteResolveConfig, getVitePlugins } from '../viteConfig.js'
+import { discoverBlocksAndGenerateModule } from './shared.js'
 
 export async function buildStorybook(targetPath: string, outDir: string) {
   console.log('🏗️  Building Blocks...')
   console.log(`📂 Target: ${targetPath}`)
   console.log(`📦 Output: ${outDir}\n`)
 
-  const blocks = await discoverBlocks(targetPath)
-
-  if (blocks.length === 0) {
-    console.error('❌ No Blocks found!')
-    console.error('A Block should have an index.ts or index.tsx file with:')
-    console.error('  - An exported Props interface')
-    console.error('  - A default exported function component')
-    process.exit(1)
-  }
-
-  console.log(`✅ Found ${blocks.length} Block(s):`)
-  blocks.forEach(block => {
-    console.log(`   - ${block.name}`)
-  })
-  console.log()
-
-  // Generate blocks module
-  const blocksModule = await generateBlocksModule(blocks)
+  const blocksModule = await discoverBlocksAndGenerateModule(targetPath)
 
   // Create a temporary directory for the virtual blocks module
   const tempDir = resolve(process.cwd(), '.blockparty-build')

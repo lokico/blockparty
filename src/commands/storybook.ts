@@ -3,29 +3,13 @@ import { createServer } from 'vite'
 import { discoverBlocks } from '../discoverBlocks.js'
 import { generateBlocksModule } from '../generateBlocksModule.js'
 import { blockPartyRoot, templatesDir, getViteResolveConfig, getVitePlugins } from '../viteConfig.js'
+import { discoverBlocksAndGenerateModule } from './shared.js'
 
 export async function startStorybookServer(targetPath: string) {
   console.log('🎉 Starting Block Party...')
   console.log(`📂 Target path: ${targetPath}\n`)
 
-  const blocks = await discoverBlocks(targetPath)
-
-  if (blocks.length === 0) {
-    console.error('❌ No Blocks found!')
-    console.error('A Block should have an index.ts or index.tsx file with:')
-    console.error('  - An exported Props interface')
-    console.error('  - A default exported function component')
-    process.exit(1)
-  }
-
-  console.log(`✅ Found ${blocks.length} Block(s):`)
-  blocks.forEach(block => {
-    console.log(`   - ${block.name}`)
-  })
-  console.log()
-
-  // Generate initial blocks module
-  let blocksModule = await generateBlocksModule(blocks)
+  let blocksModule = await discoverBlocksAndGenerateModule(targetPath)
 
   // Resolve target path through symlinks for comparison
   const realTargetPath = realpathSync(targetPath)
