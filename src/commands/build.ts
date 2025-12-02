@@ -169,7 +169,7 @@ export async function buildBlocks(targetPath: string, outDir: string) {
           lib: {
             entry: block.path,
             formats: ['es'],
-            fileName: 'index'
+            fileName: () => 'index.js'
           },
           outDir: resolve(outputDir, safeFileName),
           minify: true,
@@ -178,12 +178,20 @@ export async function buildBlocks(targetPath: string, outDir: string) {
             external: externalDeps,
             output: {
               assetFileNames: (assetInfo) => {
-                if (assetInfo.name?.endsWith('.css')) {
-                  css.push(assetInfo.name)
-                } else if (assetInfo.name) {
-                  assets.push(assetInfo.name)
+                const assetName = assetInfo.name
+                if (assetName === undefined) {
+                  // FIXME: What to do if assetName is undefined?
+                  return 'asset'
                 }
-                return assetInfo.name ?? 'asset'
+                const assetPath = `./${safeFileName}/${assetName}`
+                if (assetName.endsWith('.css')) {
+                  if (!css.includes(assetPath)) {
+                    css.push(assetPath)
+                  }
+                } else if (!assets.includes(assetPath)) {
+                  assets.push(assetPath)
+                }
+                return assetName
               }
             }
           }

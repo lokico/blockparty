@@ -146,3 +146,38 @@ export default ({ who, greeting = 'Hello' }: Props) => {
     <h1 className={styles.heading}>{greeting}, {who}!</h1>
   )
 }
+```
+
+## Hacking on Block Party
+
+### Running the CLI
+
+To run the Block Party CLI command (e.g. `npx blockparty`) from within the git checkout, run:
+
+```
+npm run cli -- ...
+```
+Where everything after the hypens are arguments to the Block Party CLI.
+
+### Running the tests
+
+```
+npm test
+```
+
+### Preparing a release
+
+1. Bump the version:
+```
+npm version patch|minor|major
+```
+
+2. Push the new git tag:
+```
+git push --tags
+```
+
+3. Publish to NPM:
+```
+npm publish
+```
