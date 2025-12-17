@@ -119,12 +119,17 @@ export default (props: Props) => <div>Complex</div>
 
     const props = extractPropsFromSource(source)
 
-    // callback is filtered out because it's a function type
-    assert.strictEqual(props.length, 2)
+    assert.strictEqual(props.length, 3)
     assert.strictEqual(props[0].name, 'items')
     assert.strictEqual(props[0].type, 'string[]')
-    assert.strictEqual(props[1].name, 'config')
-    assert.strictEqual(props[1].type, '{ key: string }')
+    assert.strictEqual(props[1].name, 'callback')
+    assert.strictEqual(props[1].type, '(x: number) => void')
+    assert.strictEqual(props[1].parameters?.[0].name, 'x')
+    assert.strictEqual(props[1].parameters?.[0].type, 'number')
+    assert.strictEqual(props[2].name, 'config')
+    assert.strictEqual(props[2].type, '{ key: string }')
+    assert.strictEqual(props[2].properties?.[0].name, 'key')
+    assert.strictEqual(props[2].properties?.[0].type, 'string')
   })
 
   test('extracts props from default export parameter type (multiple types exported)', () => {
@@ -164,10 +169,10 @@ export default function Button({ label, onClick, disabled }: ButtonProps) {
 
     const props = extractPropsFromSource(source)
 
-    // onClick is filtered out because it's a function type
-    assert.strictEqual(props.length, 2)
+    assert.strictEqual(props.length, 3)
     assert.deepStrictEqual(props[0], { name: 'label', type: 'string', optional: false })
-    assert.deepStrictEqual(props[1], { name: 'disabled', type: 'boolean', optional: true })
+    assert.deepStrictEqual(props[1], { name: 'onClick', type: '() => void', parameters: [], optional: false })
+    assert.deepStrictEqual(props[2], { name: 'disabled', type: 'boolean', optional: true })
   })
 
   test('extracts JSDoc comments from interface props', () => {
@@ -288,7 +293,7 @@ export default ({ commented }: Props) => <div>{commented}</div>
     assert.strictEqual(props[1].description, undefined)
   })
 
-  test('filters out function-typed props', () => {
+  test('does not filter out function-typed props', () => {
     const source = `
 export interface Props {
   /**
@@ -296,11 +301,11 @@ export interface Props {
    */
   name: string
   /**
-   * A function prop (should be filtered)
+   * A function prop
    */
   onClick: () => void
   /**
-   * Another function (should be filtered)
+   * Another function
    */
   onHover: (x: number) => void
 }
@@ -310,9 +315,16 @@ export default ({ name }: Props) => <div>{name}</div>
 
     const props = extractPropsFromSource(source)
 
-    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props.length, 3)
     assert.strictEqual(props[0].name, 'name')
     assert.strictEqual(props[0].description, 'A regular string prop')
+    assert.strictEqual(props[1].name, 'onClick')
+    assert.strictEqual(props[1].description, 'A function prop')
+    assert.strictEqual(props[1].parameters?.length, 0)
+    assert.strictEqual(props[2].name, 'onHover')
+    assert.strictEqual(props[2].description, 'Another function')
+    assert.strictEqual(props[2].parameters?.[0].name, 'x')
+    assert.strictEqual(props[2].parameters?.[0].type, 'number')
   })
 
   test('extracts nested properties with descriptions', () => {

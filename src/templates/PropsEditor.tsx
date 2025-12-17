@@ -10,6 +10,7 @@ interface PropDefinition {
   type: string
   optional: boolean
   properties?: PropDefinition[]
+  parameters?: PropDefinition[]
   description?: string
 }
 
@@ -27,9 +28,17 @@ interface PropsEditorProps {
   availableBlocks?: RuntimeBlockInfo[]
 }
 
+const isFunctionType = (type: string): boolean => {
+  return type.includes('=>') || type.startsWith('(') && type.includes(')')
+}
+
 const isComplexType = (type: string) => {
   // String unions like "foo" | "bar" are not complex, they get a dropdown
   if (isStringUnion(type)) {
+    return false
+  }
+  // Function types are not complex either - they get a special editor
+  if (isFunctionType(type)) {
     return false
   }
   return type.includes('[') || type.includes('{') || type.includes('|')
@@ -558,6 +567,52 @@ function ReactNodeEditor({ value, onChange, optional, availableBlocks }: ReactNo
   )
 }
 
+interface FunctionEditorProps {
+  parameters: PropDefinition[]
+  value: string
+  onChange: (value: string) => void
+}
+
+function FunctionEditor({ parameters, value, onChange }: FunctionEditorProps) {
+  // Build the function signature from parameters
+  const paramSignature = parameters.map(p =>
+    `${p.name}${p.optional ? '?' : ''}: ${p.type}`
+  ).join(', ')
+
+  return (
+    <div>
+      <div style={{
+        fontSize: '11px',
+        fontFamily: 'monospace',
+        color: '#666',
+        marginBottom: '4px',
+        padding: '4px 8px',
+        background: '#f5f5f5',
+        borderRadius: '3px',
+        border: '1px solid #e0e0e0'
+      }}>
+        ({paramSignature}) =&gt;
+      </div>
+      <textarea
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Enter function body (without braces)"
+        style={{
+          width: '100%',
+          padding: '6px 8px',
+          border: '1px solid #ddd',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontFamily: 'monospace',
+          boxSizing: 'border-box',
+          minHeight: '60px',
+          resize: 'vertical'
+        }}
+      />
+    </div>
+  )
+}
+
 interface ItemEditorProps {
   propDef: PropDefinition
   value: any
@@ -565,7 +620,18 @@ interface ItemEditorProps {
   availableBlocks?: RuntimeBlockInfo[]
 }
 
-function ItemEditor({ value, onChange, propDef: { type, properties, optional}, availableBlocks = [] }: ItemEditorProps) {
+function ItemEditor({ value, onChange, propDef: { type, properties, parameters, optional}, availableBlocks = [] }: ItemEditorProps) {
+  // For function types, show function editor
+  if (parameters && parameters.length >= 0) {
+    return (
+      <FunctionEditor
+        parameters={parameters}
+        value={value || ''}
+        onChange={onChange}
+      />
+    )
+  }
+
   // For React.ReactNode, show block selector
   if (type === 'React.ReactNode' || type === 'ReactNode') {
     return (

@@ -7,6 +7,8 @@ interface PropDefinition {
   name: string
   type: string
   optional: boolean
+  parameters?: PropDefinition[]
+  properties?: PropDefinition[]
 }
 
 const STORAGE_KEY = 'blockparty-state'
@@ -37,7 +39,28 @@ const getDefaultValue = (type: string, optional: boolean) => {
   return ''
 }
 
-const parseValue = (value: string, type: string, propDefs: PropDefinition[]) => {
+const parseValue = (value: string, type: string, propDefs: PropDefinition[], propDef?: PropDefinition) => {
+  // For function types, create a function from the body string (even if empty)
+  if (propDef?.parameters) {
+    if (!value) {
+      // Return empty function for empty value
+      return () => {}
+    }
+    try {
+      // Extract parameter names
+      const paramNames = propDef.parameters.map(p => p.name).join(', ')
+      // Create function from the body string
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(paramNames, `return ${value}`)
+      console.log('Created function for', propDef.name, 'with body:', value, 'result:', fn)
+      return fn
+    } catch (error) {
+      console.error('Failed to create function:', error)
+      return () => {}
+    }
+  }
+
+  // After handling functions, check for empty values
   if (!value) return value
 
   // For React.ReactNode, parse and render the block(s) - always an array
@@ -56,7 +79,7 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[]) => 
               const parsedBlockProps = Object.fromEntries(
                 Object.entries(blockProps).map(([key, val]) => {
                   const propDef = block.propDefinitions.find((p: PropDefinition) => p.name === key)
-                  return [key, propDef ? parseValue(val as string, propDef.type, block.propDefinitions) : val]
+                  return [key, propDef ? parseValue(val as string, propDef.type, block.propDefinitions, propDef) : val]
                 })
               )
               return <block.Component key={index} {...parsedBlockProps} />
@@ -72,11 +95,35 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[]) => 
 
   // For complex types, try to parse as JSON
   if (isComplexType(type)) {
-    try {
-      return JSON.parse(value)
-    } catch {
-      return value
+    let parsed: any
+
+    // Handle both string JSON and already-parsed objects
+    if (typeof value === 'string') {
+      try {
+        parsed = JSON.parse(value)
+      } catch {
+        return value
+      }
+    } else {
+      parsed = value
     }
+
+    // If we have property definitions and the parsed value is an object,
+    // recursively parse nested properties (including function types)
+    if (propDef?.properties && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const result: Record<string, any> = {}
+      for (const [key, val] of Object.entries(parsed)) {
+        const nestedPropDef = propDef.properties.find(p => p.name === key)
+        if (nestedPropDef) {
+          result[key] = parseValue(val as string, nestedPropDef.type, propDefs, nestedPropDef)
+        } else {
+          result[key] = val
+        }
+      }
+      return result
+    }
+
+    return parsed
   }
 
   // For simple number type, parse as number
@@ -164,7 +211,7 @@ export function App() {
   const parsedProps = Object.fromEntries(
     Object.entries(props).map(([key, value]) => {
       const propDef = propDefinitions.find((p: PropDefinition) => p.name === key)
-      return [key, propDef ? parseValue(value as string, propDef.type, propDefinitions) : value]
+      return [key, propDef ? parseValue(value as string, propDef.type, propDefinitions, propDef) : value]
     })
   )
 
