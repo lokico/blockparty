@@ -172,6 +172,23 @@ function extractPropertiesFromDeclaration(
   const props: PropDefinition[] = []
 
   if (ts.isInterfaceDeclaration(decl)) {
+    // First, extract properties from extended interfaces
+    if (decl.heritageClauses) {
+      for (const heritageClause of decl.heritageClauses) {
+        if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
+          for (const typeExpr of heritageClause.types) {
+            const typeName = typeExpr.expression.getText(sourceFile)
+            const baseDecl = findTypeDeclaration(sourceFile, typeName)
+            if (baseDecl) {
+              const inheritedProps = extractPropertiesFromDeclaration(baseDecl, sourceFile)
+              props.push(...inheritedProps)
+            }
+          }
+        }
+      }
+    }
+
+    // Then, extract properties directly declared on this interface
     for (const member of decl.members) {
       if (ts.isPropertySignature(member) && member.name) {
         const name = member.name.getText(sourceFile)

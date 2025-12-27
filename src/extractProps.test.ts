@@ -361,4 +361,52 @@ export default ({ config }: Props) => <div>{config.apiKey}</div>
     assert.strictEqual(props[0].properties?.[1].name, 'timeout')
     assert.strictEqual(props[0].properties?.[1].description, 'Timeout in milliseconds')
   })
+
+  test('extracts inherited props when interface extends base interface', () => {
+    const source = `
+export interface BaseProps {
+  /**
+   * Base property: ID
+   */
+  id: string
+  /**
+   * Base property: Name
+   */
+  name: string
+}
+
+export interface Props extends BaseProps {
+  /**
+   * Extended property: Title
+   */
+  title: string
+  /**
+   * Extended property: Count
+   */
+  count?: number
+}
+
+export default ({ id, name, title }: Props) => <div>{title}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 4)
+    assert.strictEqual(props[0].name, 'id')
+    assert.strictEqual(props[0].type, 'string')
+    assert.strictEqual(props[0].optional, false)
+    assert.strictEqual(props[0].description, 'Base property: ID')
+    assert.strictEqual(props[1].name, 'name')
+    assert.strictEqual(props[1].type, 'string')
+    assert.strictEqual(props[1].optional, false)
+    assert.strictEqual(props[1].description, 'Base property: Name')
+    assert.strictEqual(props[2].name, 'title')
+    assert.strictEqual(props[2].type, 'string')
+    assert.strictEqual(props[2].optional, false)
+    assert.strictEqual(props[2].description, 'Extended property: Title')
+    assert.strictEqual(props[3].name, 'count')
+    assert.strictEqual(props[3].type, 'number')
+    assert.strictEqual(props[3].optional, true)
+    assert.strictEqual(props[3].description, 'Extended property: Count')
+  })
 })
