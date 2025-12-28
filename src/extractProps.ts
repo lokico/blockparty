@@ -165,9 +165,44 @@ function extractNestedProperties(typeNode: ts.TypeNode, sourceFile: ts.SourceFil
   return []
 }
 
+function extractPropertyFromSignature(
+  member: ts.PropertySignature,
+  sourceFile: ts.SourceFile
+): PropDefinition {
+  const name = member.name!.getText(sourceFile)
+  const optional = !!member.questionToken
+  const type = member.type ? member.type.getText(sourceFile) : 'any'
+
+  const propDef: PropDefinition = { name, type, optional }
+
+  // Extract JSDoc comment if available
+  const description = extractJSDocComment(member, sourceFile)
+  if (description) {
+    propDef.description = description
+  }
+
+  // If this property has a type, check if it's a function or object type
+  if (member.type) {
+    if (isFunctionType(member.type)) {
+      // Extract function parameters
+      const params = extractFunctionParameters(member.type, sourceFile)
+      propDef.parameters = params
+    } else {
+      // Try to extract nested properties for object types
+      const nestedProps = extractNestedProperties(member.type, sourceFile)
+      if (nestedProps.length > 0) {
+        propDef.properties = nestedProps
+      }
+    }
+  }
+
+  return propDef
+}
+
 function extractPropertiesFromDeclaration(
   decl: ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
-  sourceFile: ts.SourceFile
+  sourceFile: ts.SourceFile,
+  typeChecker?: ts.TypeChecker
 ): PropDefinition[] {
   const props: PropDefinition[] = []
 
@@ -177,10 +212,28 @@ function extractPropertiesFromDeclaration(
       for (const heritageClause of decl.heritageClauses) {
         if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
           for (const typeExpr of heritageClause.types) {
-            const typeName = typeExpr.expression.getText(sourceFile)
-            const baseDecl = findTypeDeclaration(sourceFile, typeName)
+            let baseDecl: ts.InterfaceDeclaration | ts.TypeAliasDeclaration | null = null
+            let baseSrcFile = sourceFile
+
+            if (typeChecker) {
+              // Use typeChecker to resolve cross-file references
+              const type = typeChecker.getTypeAtLocation(typeExpr)
+              const symbol = type.getSymbol()
+              if (symbol && symbol.declarations && symbol.declarations.length > 0) {
+                const decl = symbol.declarations[0]
+                if (ts.isInterfaceDeclaration(decl) || ts.isTypeAliasDeclaration(decl)) {
+                  baseDecl = decl
+                  baseSrcFile = decl.getSourceFile()
+                }
+              }
+            } else {
+              // Fall back to same-file lookup
+              const typeName = typeExpr.expression.getText(sourceFile)
+              baseDecl = findTypeDeclaration(sourceFile, typeName)
+            }
+
             if (baseDecl) {
-              const inheritedProps = extractPropertiesFromDeclaration(baseDecl, sourceFile)
+              const inheritedProps = extractPropertiesFromDeclaration(baseDecl, baseSrcFile, typeChecker)
               props.push(...inheritedProps)
             }
           }
@@ -191,68 +244,14 @@ function extractPropertiesFromDeclaration(
     // Then, extract properties directly declared on this interface
     for (const member of decl.members) {
       if (ts.isPropertySignature(member) && member.name) {
-        const name = member.name.getText(sourceFile)
-        const optional = !!member.questionToken
-        const type = member.type ? member.type.getText(sourceFile) : 'any'
-
-        const propDef: PropDefinition = { name, type, optional }
-
-        // Extract JSDoc comment if available
-        const description = extractJSDocComment(member, sourceFile)
-        if (description) {
-          propDef.description = description
-        }
-
-        // If this property has a type, check if it's a function or object type
-        if (member.type) {
-          if (isFunctionType(member.type)) {
-            // Extract function parameters
-            const params = extractFunctionParameters(member.type, sourceFile)
-            propDef.parameters = params
-          } else {
-            // Try to extract nested properties for object types
-            const nestedProps = extractNestedProperties(member.type, sourceFile)
-            if (nestedProps.length > 0) {
-              propDef.properties = nestedProps
-            }
-          }
-        }
-
-        props.push(propDef)
+        props.push(extractPropertyFromSignature(member, sourceFile))
       }
     }
   } else if (ts.isTypeAliasDeclaration(decl) && decl.type) {
     if (ts.isTypeLiteralNode(decl.type)) {
       for (const member of decl.type.members) {
         if (ts.isPropertySignature(member) && member.name) {
-          const name = member.name.getText(sourceFile)
-          const optional = !!member.questionToken
-          const type = member.type ? member.type.getText(sourceFile) : 'any'
-
-          const propDef: PropDefinition = { name, type, optional }
-
-          // Extract JSDoc comment if available
-          const description = extractJSDocComment(member, sourceFile)
-          if (description) {
-            propDef.description = description
-          }
-
-          // If this property has a type, check if it's a function or object type
-          if (member.type) {
-            if (isFunctionType(member.type)) {
-              // Extract function parameters
-              const params = extractFunctionParameters(member.type, sourceFile)
-              propDef.parameters = params
-            } else {
-              // Try to extract nested properties for object types
-              const nestedProps = extractNestedProperties(member.type, sourceFile)
-              if (nestedProps.length > 0) {
-                propDef.properties = nestedProps
-              }
-            }
-          }
-
-          props.push(propDef)
+          props.push(extractPropertyFromSignature(member, sourceFile))
         }
       }
     }
@@ -275,14 +274,7 @@ function findTypeDeclaration(sourceFile: ts.SourceFile, typeName: string): ts.In
   return result
 }
 
-export function extractPropsFromSource(content: string, fileName: string = 'source.tsx'): PropDefinition[] {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    content,
-    ts.ScriptTarget.Latest,
-    true
-  )
-
+function findDefaultExportFunction(sourceFile: ts.SourceFile): ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression | null {
   // Find the default export
   let defaultExport: ts.ExportAssignment | ts.FunctionDeclaration | null = null
 
@@ -306,7 +298,7 @@ export function extractPropsFromSource(content: string, fileName: string = 'sour
   visit(sourceFile)
 
   if (!defaultExport) {
-    return []
+    return null
   }
 
   // Get the function from the default export
@@ -329,6 +321,18 @@ export function extractPropsFromSource(content: string, fileName: string = 'sour
     }
   }
 
+  return func
+}
+
+export function extractPropsFromSource(content: string, fileName: string = 'source.tsx'): PropDefinition[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    content,
+    ts.ScriptTarget.Latest,
+    true
+  )
+
+  const func = findDefaultExportFunction(sourceFile)
   if (!func || !func.parameters || func.parameters.length === 0) {
     return []
   }
@@ -366,10 +370,80 @@ function findFunctionDeclaration(sourceFile: ts.SourceFile, name: string): ts.Fu
 
 export async function extractPropsFromFile(filePath: string): Promise<PropDefinition[]> {
   try {
-    const content = await readFile(filePath, 'utf-8')
-    return extractPropsFromSource(content, filePath)
+    // Create a TypeScript program to resolve imports
+    const program = ts.createProgram([filePath], {
+      target: ts.ScriptTarget.Latest,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      jsx: ts.JsxEmit.React,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      noEmit: true,
+      allowImportingTsExtensions: true,
+    })
+
+    const sourceFile = program.getSourceFile(filePath)
+    if (!sourceFile) {
+      return []
+    }
+
+    const typeChecker = program.getTypeChecker()
+    return extractPropsFromSourceFile(sourceFile, typeChecker)
   } catch (error) {
     console.error(`Error extracting props from ${filePath}:`, error)
     return []
   }
+}
+
+function extractPropsFromSourceFile(sourceFile: ts.SourceFile, typeChecker: ts.TypeChecker): PropDefinition[] {
+  const func = findDefaultExportFunction(sourceFile)
+  if (!func || !func.parameters || func.parameters.length === 0) {
+    return []
+  }
+
+  // Get the first parameter's type
+  const firstParam = func.parameters[0]
+  if (!firstParam.type) {
+    return []
+  }
+
+  return extractPropertiesFromTypeNode(firstParam.type, sourceFile, typeChecker)
+}
+
+function extractPropertiesFromTypeNode(
+  typeNode: ts.TypeNode,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker
+): PropDefinition[] {
+  const props: PropDefinition[] = []
+
+  if (ts.isTypeLiteralNode(typeNode)) {
+    return extractPropertiesFromType(typeNode, sourceFile)
+  } else if (ts.isTypeReferenceNode(typeNode)) {
+    // Type reference like "Props" or "ComponentProps"
+    const typeName = typeNode.typeName.getText(sourceFile)
+
+    // First try to find in the same file
+    let typeDecl = findTypeDeclaration(sourceFile, typeName)
+
+    // If not found, try to resolve using typeChecker
+    if (!typeDecl) {
+      const type = typeChecker.getTypeAtLocation(typeNode)
+      const symbol = type.getSymbol()
+      if (symbol && symbol.declarations && symbol.declarations.length > 0) {
+        const decl = symbol.declarations[0]
+        if (ts.isInterfaceDeclaration(decl) || ts.isTypeAliasDeclaration(decl)) {
+          typeDecl = decl
+          // Use the source file where the declaration is located
+          sourceFile = decl.getSourceFile()
+        }
+      }
+    }
+
+    if (typeDecl) {
+      return extractPropertiesFromDeclaration(typeDecl, sourceFile, typeChecker)
+    }
+  }
+
+  return props
 }
