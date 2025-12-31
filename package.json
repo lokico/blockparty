@@ -1,6 +1,6 @@
 {
   "name": "blockparty",
-  "version": "0.2.2",
+  "version": "1.0.0",
   "description": "Easy, zero-config, convention-based React components.",
   "repository": "github:chkn/blockparty",
   "type": "module",
