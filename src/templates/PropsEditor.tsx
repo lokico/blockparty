@@ -1,17 +1,9 @@
 import { useState } from 'react'
+import type { PropDefinition, PropType } from '../extractProps.js'
 
 interface ReactNodeValue {
   __block: string  // Block name
   __props: Record<string, any>  // Props for the block
-}
-
-interface PropDefinition {
-  name: string
-  type: string
-  optional: boolean
-  properties?: PropDefinition[]
-  parameters?: PropDefinition[]
-  description?: string
 }
 
 export interface RuntimeBlockInfo {
@@ -28,63 +20,66 @@ interface PropsEditorProps {
   availableBlocks?: RuntimeBlockInfo[]
 }
 
-const isFunctionType = (type: string): boolean => {
-  return type.includes('=>') || type.startsWith('(') && type.includes(')')
+const isFunctionType = (propType: PropType): boolean => {
+  return propType.kind === 'function'
 }
 
-const isComplexType = (type: string) => {
-  // String unions like "foo" | "bar" are not complex, they get a dropdown
-  if (isStringUnion(type)) {
+const isComplexType = (propType: PropType) => {
+  // Constant unions like "foo" | "bar" are not complex, they get a dropdown
+  if (isConstantUnion(propType)) {
     return false
   }
   // Function types are not complex either - they get a special editor
-  if (isFunctionType(type)) {
+  if (isFunctionType(propType)) {
     return false
   }
-  return type.includes('[') || type.includes('{') || type.includes('|')
+  // Objects, arrays, tuples, and other unions are complex
+  return propType.kind === 'object' || propType.kind === 'union' || propType.kind === 'array' || propType.kind === 'tuple'
 }
 
-const isStringUnion = (type: string): boolean => {
-  // Check if it's a union of string literals: "foo" | "bar" | "baz"
-  if (!type.includes('|')) return false
-
-  // Split by | and check if all parts are string literals
-  const parts = type.split('|').map(p => p.trim())
-  return parts.every(part =>
-    (part.startsWith('"') && part.endsWith('"')) ||
-    (part.startsWith("'") && part.endsWith("'"))
-  )
+const isConstantUnion = (propType: PropType): boolean => {
+  // Check if it's a union of constants: "foo" | "bar" | 123 | true
+  if (propType.kind !== 'union') return false
+  return propType.types.every(t => t.kind === 'constant')
 }
 
-const parseStringUnion = (type: string): string[] => {
-  return type.split('|').map(part => {
-    const trimmed = part.trim()
-    // Remove quotes
-    return trimmed.slice(1, -1)
-  })
+const parseConstantUnion = (propType: PropType): string[] => {
+  if (propType.kind !== 'union') return []
+  return propType.types
+    .filter((t): t is Extract<PropType, { kind: 'constant' }> => t.kind === 'constant')
+    .map(t => t.value.replace(/^["']|["']$/g, ''))  // Remove quotes from strings
 }
 
-const getDefaultValue = (type: string, optional: boolean) => {
+const getDefaultValue = (propType: PropType, optional: boolean): string => {
   if (optional) return ''
 
-  if (type.includes('[]')) {
-    return '[]'
-  }
-
-  if (type.includes('{') || type.includes('object')) {
+  if (propType.kind === 'object') {
     return '{}'
   }
 
-  if (type === 'number') {
+  if (propType.kind === 'array') {
+    return '[]'
+  }
+
+  if (propType.kind === 'tuple') {
+    // Return an array with default values for each tuple element
+    const defaults = propType.types.map(t => {
+      const defaultVal = getDefaultValue(t, false)
+      return JSON.parse(defaultVal)
+    })
+    return JSON.stringify(defaults)
+  }
+
+  if (propType.syntax === 'number') {
     return '0'
   }
 
-  if (type === 'boolean') {
+  if (propType.syntax === 'boolean') {
     return 'false'
   }
 
-  if (isStringUnion(type)) {
-    const options = parseStringUnion(type)
+  if (isConstantUnion(propType)) {
+    const options = parseConstantUnion(propType)
     return options[0] || ''
   }
 
@@ -146,10 +141,9 @@ export function PropsEditor({ propDefinitions, props, onPropsChange, availableBl
           />
         ) : (
           <RichEditor
-            type={propDef.type}
+            propType={propDef.type}
             value={props[propDef.name] || ''}
             onChange={(value) => updateProp(propDef.name, value, propDef.optional)}
-            properties={propDef.properties}
             availableBlocks={availableBlocks}
           />
         )}
@@ -169,7 +163,7 @@ export function PropsEditor({ propDefinitions, props, onPropsChange, availableBl
               <label style={{ fontSize: '12px', fontWeight: 500 }}>
                 {propDef.name}{propDef.optional ? '' : ' *'}
                 <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
-                  {propDef.type}
+                  {propDef.type.syntax}
                 </span>
               </label>
               {isComplex && (
@@ -204,35 +198,32 @@ export function PropsEditor({ propDefinitions, props, onPropsChange, availableBl
 }
 
 interface RichEditorProps {
-  type: string
+  propType: PropType
   value: string
   onChange: (value: string, optional: boolean) => void
-  properties?: PropDefinition[]
   availableBlocks?: RuntimeBlockInfo[]
 }
 
-function RichEditor({ type, value, onChange, properties, availableBlocks = [] }: RichEditorProps) {
+function RichEditor({ propType, value, onChange, availableBlocks = [] }: RichEditorProps) {
   // Parse the current value
   let parsedValue: any
   try {
-    parsedValue = value ? JSON.parse(value) : (type.includes('[]') ? [] : {})
+    parsedValue = value ? JSON.parse(value) : (propType.kind === 'array' || propType.kind === 'tuple' ? [] : {})
   } catch {
-    parsedValue = type.includes('[]') ? [] : {}
+    parsedValue = propType.kind === 'array' || propType.kind === 'tuple' ? [] : {}
   }
 
   // Array type
-  if (type.includes('[]')) {
+  if (propType.kind === 'array') {
     const items = Array.isArray(parsedValue) ? parsedValue : []
-    const elementType = type.replace('[]', '').trim()
     const elementPropDef: PropDefinition = {
       name: '',
-      type: elementType,
-      optional: false, // FIXME
-      properties
+      type: propType.elementType,
+      optional: false,
     }
 
     const addItem = () => {
-      const newItems = [...items, getDefaultValue(elementType, false)]
+      const newItems = [...items, getDefaultValue(propType.elementType, false)]
       onChange(JSON.stringify(newItems), false)
     }
 
@@ -255,7 +246,7 @@ function RichEditor({ type, value, onChange, properties, availableBlocks = [] }:
         background: '#fafafa'
       }}>
         <div style={{ marginBottom: '8px', fontSize: '11px', color: '#666' }}>
-          Array of {elementType} ({items.length} item{items.length !== 1 ? 's' : ''})
+          Array of {propType.elementType.syntax} ({items.length} item{items.length !== 1 ? 's' : ''})
         </div>
         {items.map((item, index) => (
           <div key={index} style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
@@ -301,13 +292,57 @@ function RichEditor({ type, value, onChange, properties, availableBlocks = [] }:
     )
   }
 
+  // Tuple type
+  if (propType.kind === 'tuple') {
+    const items = Array.isArray(parsedValue) ? parsedValue : Array(propType.types.length).fill('')
+
+    const updateItem = (index: number, newValue: any) => {
+      const newItems = [...items]
+      newItems[index] = newValue
+      onChange(JSON.stringify(newItems), false)
+    }
+
+    return (
+      <div style={{
+        border: '1px solid #ddd',
+        borderRadius: '4px',
+        padding: '8px',
+        background: '#fafafa'
+      }}>
+        <div style={{ marginBottom: '8px', fontSize: '11px', color: '#666' }}>
+          Tuple [{propType.types.map(t => t.syntax).join(', ')}]
+        </div>
+        {propType.types.map((elementType, index) => {
+          const elementPropDef: PropDefinition = {
+            name: `[${index}]`,
+            type: elementType,
+            optional: false,
+          }
+          return (
+            <div key={index} style={{ marginBottom: '8px' }}>
+              <label style={{ display: 'block', fontSize: '11px', marginBottom: '2px', fontWeight: 500 }}>
+                [{index}] {elementType.syntax}
+              </label>
+              <ItemEditor
+                propDef={elementPropDef}
+                value={items[index]}
+                onChange={(newValue) => updateItem(index, newValue)}
+                availableBlocks={availableBlocks}
+              />
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   // Object type - show rich editor if we have property definitions
-  if (properties && properties.length > 0) {
+  if (propType.kind === 'object' && propType.properties.length > 0) {
     return (
       <ObjectEditor
         value={value}
         onChange={(v) => onChange(v, false)}
-        properties={properties}
+        properties={propType.properties}
         availableBlocks={availableBlocks}
       />
     )
@@ -329,7 +364,7 @@ function RichEditor({ type, value, onChange, properties, availableBlocks = [] }:
         minHeight: '60px',
         resize: 'vertical'
       }}
-      placeholder={`Enter JSON for ${type}`}
+      placeholder={`Enter JSON for ${propType.syntax}`}
     />
   )
 }
@@ -369,7 +404,7 @@ function ObjectEditor({ value, onChange, properties, availableBlocks = [] }: Obj
           <label style={{ display: 'block', fontSize: '11px', marginBottom: '2px', fontWeight: 500 }}>
             {prop.name}{prop.optional ? '' : ' *'}
             <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
-              {prop.type}
+              {prop.type.syntax}
             </span>
           </label>
           {prop.description && (
@@ -576,7 +611,7 @@ interface FunctionEditorProps {
 function FunctionEditor({ parameters, value, onChange }: FunctionEditorProps) {
   // Build the function signature from parameters
   const paramSignature = parameters.map(p =>
-    `${p.name}${p.optional ? '?' : ''}: ${p.type}`
+    `${p.name}${p.optional ? '?' : ''}: ${p.type.syntax}`
   ).join(', ')
 
   return (
@@ -620,12 +655,14 @@ interface ItemEditorProps {
   availableBlocks?: RuntimeBlockInfo[]
 }
 
-function ItemEditor({ value, onChange, propDef: { type, properties, parameters, optional}, availableBlocks = [] }: ItemEditorProps) {
+function ItemEditor({ value, onChange, propDef, availableBlocks = [] }: ItemEditorProps) {
+  const { type, optional } = propDef
+
   // For function types, show function editor
-  if (parameters && parameters.length >= 0) {
+  if (type.kind === 'function') {
     return (
       <FunctionEditor
-        parameters={parameters}
+        parameters={type.parameters}
         value={value || ''}
         onChange={onChange}
       />
@@ -633,7 +670,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
   }
 
   // For React.ReactNode, show block selector
-  if (type === 'React.ReactNode' || type === 'ReactNode') {
+  if (type.syntax === 'React.ReactNode' || type.syntax === 'ReactNode') {
     return (
       <ReactNodeEditor
         value={value}
@@ -644,9 +681,9 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
     )
   }
 
-  // For string unions, show dropdown
-  if (isStringUnion(type)) {
-    const options = parseStringUnion(type)
+  // For constant unions, show dropdown
+  if (isConstantUnion(type)) {
+    const options = parseConstantUnion(type)
     return (
       <select
         value={value || ''}
@@ -668,7 +705,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
   }
 
   // For primitive types
-  if (type === 'string') {
+  if (type.syntax === 'string') {
     return (
       <input
         type="text"
@@ -685,7 +722,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
     )
   }
 
-  if (type === 'number') {
+  if (type.syntax === 'number') {
     return (
       <input
         type="number"
@@ -710,7 +747,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
     )
   }
 
-  if (type === 'boolean') {
+  if (type.syntax === 'boolean') {
     return (
       <select
         value={value ? 'true' : 'false'}
@@ -730,7 +767,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
   }
 
   // For object types with known properties, show structured editor
-  if (properties && properties.length > 0) {
+  if (type.kind === 'object' && type.properties.length > 0) {
     return (
       <ObjectEditor
         value={typeof value === 'string' ? value : JSON.stringify(value)}
@@ -741,7 +778,7 @@ function ItemEditor({ value, onChange, propDef: { type, properties, parameters, 
             onChange(newValue)
           }
         }}
-        properties={properties}
+        properties={type.properties}
         availableBlocks={availableBlocks}
       />
     )

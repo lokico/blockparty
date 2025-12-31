@@ -1,12 +1,19 @@
 import { readFile } from 'fs/promises'
 import * as ts from 'typescript'
 
+export type PropType =
+  | { kind: 'primitive'; syntax: string }
+  | { kind: 'object'; syntax: string; properties: PropDefinition[] }
+  | { kind: 'function'; syntax: string; parameters: PropDefinition[] }
+  | { kind: 'union'; syntax: string; types: PropType[] }
+  | { kind: 'constant'; syntax: string; value: string }
+  | { kind: 'array'; syntax: string; elementType: PropType }
+  | { kind: 'tuple'; syntax: string; types: PropType[] }
+
 export interface PropDefinition {
   name: string
-  type: string
+  type: PropType
   optional: boolean
-  properties?: PropDefinition[]  // For object types, the nested properties
-  parameters?: PropDefinition[]  // For function types, the parameters
   description?: string  // JSDoc comment text
 }
 
@@ -25,6 +32,71 @@ function isFunctionType(typeNode: ts.TypeNode | undefined): boolean {
   }
 
   return false
+}
+
+function isLiteralType(typeNode: ts.TypeNode | undefined): boolean {
+  if (!typeNode) return false
+  return ts.isLiteralTypeNode(typeNode)
+}
+
+function extractLiteralValue(typeNode: ts.LiteralTypeNode, sourceFile: ts.SourceFile): string {
+  return typeNode.literal.getText(sourceFile)
+}
+
+function buildPropType(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropType {
+  const syntax = typeNode.getText(sourceFile)
+
+  // Handle literal types (string/number/boolean constants)
+  if (ts.isLiteralTypeNode(typeNode)) {
+    const value = extractLiteralValue(typeNode, sourceFile)
+    return { kind: 'constant', syntax, value }
+  }
+
+  // Handle tuple types (before union, as tuples are TupleTypeNode)
+  if (ts.isTupleTypeNode(typeNode)) {
+    const types = typeNode.elements.map(el => buildPropType(el, sourceFile))
+    return { kind: 'tuple', syntax, types }
+  }
+
+  // Handle union types
+  if (ts.isUnionTypeNode(typeNode)) {
+    const types = typeNode.types.map(t => buildPropType(t, sourceFile))
+    return { kind: 'union', syntax, types }
+  }
+
+  // Handle array types
+  if (ts.isArrayTypeNode(typeNode)) {
+    const elementType = buildPropType(typeNode.elementType, sourceFile)
+    return { kind: 'array', syntax, elementType }
+  }
+
+  // Handle function types
+  if (isFunctionType(typeNode)) {
+    const parameters = extractFunctionParameters(typeNode, sourceFile)
+    return { kind: 'function', syntax, parameters }
+  }
+
+  // Handle object types (type literals)
+  if (ts.isTypeLiteralNode(typeNode)) {
+    const properties = extractPropertiesFromType(typeNode, sourceFile)
+    return { kind: 'object', syntax, properties }
+  }
+
+  // Handle type references (might resolve to object/function/etc)
+  if (ts.isTypeReferenceNode(typeNode)) {
+    const typeName = typeNode.typeName.getText(sourceFile)
+    const typeDecl = findTypeDeclaration(sourceFile, typeName)
+
+    if (typeDecl) {
+      const properties = extractPropertiesFromDeclaration(typeDecl, sourceFile)
+      if (properties.length > 0) {
+        return { kind: 'object', syntax, properties }
+      }
+    }
+  }
+
+  // Default: primitive type
+  return { kind: 'primitive', syntax }
 }
 
 function extractFunctionParameters(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropDefinition[] {
@@ -54,10 +126,12 @@ function extractFunctionParameters(typeNode: ts.TypeNode, sourceFile: ts.SourceF
   const parameters: PropDefinition[] = []
   for (const param of functionNode.parameters) {
     const name = param.name.getText(sourceFile)
-    const type = param.type ? param.type.getText(sourceFile) : 'any'
     const optional = !!param.questionToken
 
-    parameters.push({ name, type, optional })
+    // Build the PropType for this parameter
+    const propType: PropType = param.type ? buildPropType(param.type, sourceFile) : { kind: 'primitive', syntax: 'any' }
+
+    parameters.push({ name, type: propType, optional })
   }
 
   return parameters
@@ -98,34 +172,7 @@ function extractPropertiesFromType(typeNode: ts.TypeNode, sourceFile: ts.SourceF
   if (ts.isTypeLiteralNode(typeNode)) {
     for (const member of typeNode.members) {
       if (ts.isPropertySignature(member) && member.name) {
-        const name = member.name.getText(sourceFile)
-        const optional = !!member.questionToken
-        const type = member.type ? member.type.getText(sourceFile) : 'any'
-
-        const propDef: PropDefinition = { name, type, optional }
-
-        // Extract JSDoc comment if available
-        const description = extractJSDocComment(member, sourceFile)
-        if (description) {
-          propDef.description = description
-        }
-
-        // If this property has a type, check if it's a function or object type
-        if (member.type) {
-          if (isFunctionType(member.type)) {
-            // Extract function parameters
-            const params = extractFunctionParameters(member.type, sourceFile)
-            propDef.parameters = params
-          } else {
-            // Try to extract nested properties for object types
-            const nestedProps = extractNestedProperties(member.type, sourceFile)
-            if (nestedProps.length > 0) {
-              propDef.properties = nestedProps
-            }
-          }
-        }
-
-        props.push(propDef)
+        props.push(extractPropertyFromSignature(member, sourceFile))
       }
     }
   } else if (ts.isTypeReferenceNode(typeNode)) {
@@ -171,29 +218,16 @@ function extractPropertyFromSignature(
 ): PropDefinition {
   const name = member.name!.getText(sourceFile)
   const optional = !!member.questionToken
-  const type = member.type ? member.type.getText(sourceFile) : 'any'
 
-  const propDef: PropDefinition = { name, type, optional }
+  // Build the PropType for this property
+  const propType: PropType = member.type ? buildPropType(member.type, sourceFile) : { kind: 'primitive', syntax: 'any' }
+
+  const propDef: PropDefinition = { name, type: propType, optional }
 
   // Extract JSDoc comment if available
   const description = extractJSDocComment(member, sourceFile)
   if (description) {
     propDef.description = description
-  }
-
-  // If this property has a type, check if it's a function or object type
-  if (member.type) {
-    if (isFunctionType(member.type)) {
-      // Extract function parameters
-      const params = extractFunctionParameters(member.type, sourceFile)
-      propDef.parameters = params
-    } else {
-      // Try to extract nested properties for object types
-      const nestedProps = extractNestedProperties(member.type, sourceFile)
-      if (nestedProps.length > 0) {
-        propDef.properties = nestedProps
-      }
-    }
   }
 
   return propDef

@@ -2,57 +2,59 @@ import { useState, useEffect } from 'react'
 import { ErrorBoundary } from './ErrorBoundary'
 import { PropsEditor } from './PropsEditor'
 import { blocks } from './blocks'
-
-interface PropDefinition {
-  name: string
-  type: string
-  optional: boolean
-  parameters?: PropDefinition[]
-  properties?: PropDefinition[]
-}
+import type { PropDefinition, PropType } from '../extractProps.js'
 
 const STORAGE_KEY = 'blockparty-state'
 
-const isComplexType = (type: string) => {
-  return type.includes('[') || type.includes('{') || type.includes('|')
+const isComplexType = (propType: PropType) => {
+  return propType.kind === 'object' || propType.kind === 'union' || propType.kind === 'array' || propType.kind === 'tuple'
 }
 
-const getDefaultValue = (type: string, optional: boolean) => {
+const getDefaultValue = (propType: PropType, optional: boolean): string => {
   if (optional) return ''
 
-  if (type.includes('[]')) {
+  if (propType.kind === 'array') {
     return '[]'
   }
 
-  if (type.includes('{') || type.includes('object')) {
+  if (propType.kind === 'tuple') {
+    // Return an array with default values for each tuple element
+    const defaults = propType.types.map(t => {
+      const defaultVal = getDefaultValue(t, false)
+      return JSON.parse(defaultVal)
+    })
+    return JSON.stringify(defaults)
+  }
+
+  if (propType.kind === 'object' || propType.syntax.includes('object')) {
     return '{}'
   }
 
-  if (type === 'number') {
+  if (propType.syntax === 'number') {
     return '0'
   }
 
-  if (type === 'boolean') {
+  if (propType.syntax === 'boolean') {
     return 'false'
   }
 
   return ''
 }
 
-const parseValue = (value: string, type: string, propDefs: PropDefinition[], propDef?: PropDefinition) => {
+const parseValue = (value: string, propType: PropType, propDefs: PropDefinition[], propDef?: PropDefinition) => {
   // For function types, create a function from the body string (even if empty)
-  if (propDef?.parameters) {
+  if (propType.kind === 'function') {
     if (!value) {
       // Return empty function for empty value
       return () => {}
     }
     try {
       // Extract parameter names
-      const paramNames = propDef.parameters.map(p => p.name).join(', ')
+      const paramNames = propType.parameters.map(p => p.name).join(', ')
       // Create function from the body string
       // eslint-disable-next-line no-new-func
       const fn = new Function(paramNames, `return ${value}`)
-      console.log('Created function for', propDef.name, 'with body:', value, 'result:', fn)
+      console.log('Created function for', propDef?.name, 'with body:', value, 'result:', fn)
       return fn
     } catch (error) {
       console.error('Failed to create function:', error)
@@ -64,7 +66,7 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[], pro
   if (!value) return value
 
   // For React.ReactNode, parse and render the block(s) - always an array
-  if (type === 'React.ReactNode' || type === 'ReactNode') {
+  if (propType.syntax === 'React.ReactNode' || propType.syntax === 'ReactNode') {
     try {
       const parsed = typeof value === 'string' ? JSON.parse(value) : value
 
@@ -94,7 +96,7 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[], pro
   }
 
   // For complex types, try to parse as JSON
-  if (isComplexType(type)) {
+  if (isComplexType(propType)) {
     let parsed: any
 
     // Handle both string JSON and already-parsed objects
@@ -108,12 +110,28 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[], pro
       parsed = value
     }
 
+    // Handle arrays - recursively parse each element
+    if (propType.kind === 'array' && Array.isArray(parsed)) {
+      return parsed.map(item => parseValue(item, propType.elementType, propDefs))
+    }
+
+    // Handle tuples - recursively parse each element with its corresponding type
+    if (propType.kind === 'tuple' && Array.isArray(parsed)) {
+      return parsed.map((item, index) => {
+        const elementType = propType.types[index]
+        if (elementType) {
+          return parseValue(item, elementType, propDefs)
+        }
+        return item
+      })
+    }
+
     // If we have property definitions and the parsed value is an object,
     // recursively parse nested properties (including function types)
-    if (propDef?.properties && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (propType.kind === 'object' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const result: Record<string, any> = {}
       for (const [key, val] of Object.entries(parsed)) {
-        const nestedPropDef = propDef.properties.find(p => p.name === key)
+        const nestedPropDef = propType.properties.find(p => p.name === key)
         if (nestedPropDef) {
           result[key] = parseValue(val as string, nestedPropDef.type, propDefs, nestedPropDef)
         } else {
@@ -127,22 +145,22 @@ const parseValue = (value: string, type: string, propDefs: PropDefinition[], pro
   }
 
   // For simple number type, parse as number
-  if (type === 'number') {
+  if (propType.syntax === 'number') {
     const num = Number(value)
     return isNaN(num) ? value : num
   }
 
   // For boolean type
-  if (type === 'boolean') {
+  if (propType.syntax === 'boolean') {
     return value === 'true'
   }
 
   return value
 }
 
-const formatValue = (value: any, type: string) => {
+const formatValue = (value: any, propType: PropType) => {
   if (value === undefined || value === null) return ''
-  if (isComplexType(type)) {
+  if (isComplexType(propType)) {
     try {
       return JSON.stringify(value, null, 2)
     } catch {
