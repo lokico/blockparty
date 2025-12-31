@@ -38,6 +38,10 @@ const getDefaultValue = (propType: PropType, optional: boolean): string => {
     return 'false'
   }
 
+  if (propType.syntax === 'Date') {
+    return new Date().toISOString().slice(0, 16) // Format for datetime-local input
+  }
+
   return ''
 }
 
@@ -153,6 +157,11 @@ const parseValue = (value: string, propType: PropType, propDefs: PropDefinition[
   // For boolean type
   if (propType.syntax === 'boolean') {
     return value === 'true'
+  }
+
+  // For Date type
+  if (propType.syntax === 'Date') {
+    return value ? new Date(value) : value
   }
 
   return value

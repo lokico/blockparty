@@ -6,7 +6,7 @@ export type PropType =
   | { kind: 'object'; syntax: string; properties: PropDefinition[] }
   | { kind: 'function'; syntax: string; parameters: PropDefinition[] }
   | { kind: 'union'; syntax: string; types: PropType[] }
-  | { kind: 'constant'; syntax: string; value: string }
+  | { kind: 'constant'; syntax: string; value: any }
   | { kind: 'array'; syntax: string; elementType: PropType }
   | { kind: 'tuple'; syntax: string; types: PropType[] }
 
@@ -15,6 +15,71 @@ export interface PropDefinition {
   type: PropType
   optional: boolean
   description?: string  // JSDoc comment text
+}
+
+export interface DiscriminatedUnionCase {
+  discriminatorValue: any
+  properties: PropDefinition[]
+}
+
+export interface DiscriminatedUnionInfo {
+  discriminator: string
+  cases: DiscriminatedUnionCase[]
+}
+
+/**
+ * Checks if a PropType is a discriminated union and returns its info.
+ * A discriminated union is a union of object types where all objects have
+ * a common property (the discriminator) with different literal values.
+ */
+export function getDiscriminatedUnionInfo(propType: PropType): DiscriminatedUnionInfo | null {
+  if (propType.kind !== 'union') {
+    return null
+  }
+
+  // All types must be objects
+  if (!propType.types.every(t => t.kind === 'object')) {
+    return null
+  }
+
+  const objectTypes = propType.types as Extract<PropType, { kind: 'object' }>[]
+
+  // Find a common property that has different constant values in each type
+  const firstType = objectTypes[0]
+  if (!firstType || firstType.properties.length === 0) {
+    return null
+  }
+
+  for (const prop of firstType.properties) {
+    // Check if this property exists in all types and has constant values
+    const allHaveProp = objectTypes.every(t =>
+      t.properties.some(p => p.name === prop.name && p.type.kind === 'constant')
+    )
+
+    if (allHaveProp) {
+      // Get the discriminator values
+      const values = objectTypes.map(t => {
+        const discriminatorProp = t.properties.find(p => p.name === prop.name)!
+        return discriminatorProp.type.kind === 'constant' ? discriminatorProp.type.value : null
+      })
+
+      // All values must be unique constants
+      if (values.every(v => v !== null) && new Set(values).size === values.length) {
+        // This is a valid discriminator
+        const cases: DiscriminatedUnionCase[] = objectTypes.map(t => {
+          const discriminatorProp = t.properties.find(p => p.name === prop.name)!
+          const discriminatorValue = discriminatorProp.type.kind === 'constant' ? discriminatorProp.type.value : ''
+          // Remove the discriminator from the properties list
+          const properties = t.properties.filter(p => p.name !== prop.name)
+          return { discriminatorValue, properties }
+        })
+
+        return { discriminator: prop.name, cases }
+      }
+    }
+  }
+
+  return null
 }
 
 function isFunctionType(typeNode: ts.TypeNode | undefined): boolean {
@@ -40,7 +105,13 @@ function isLiteralType(typeNode: ts.TypeNode | undefined): boolean {
 }
 
 function extractLiteralValue(typeNode: ts.LiteralTypeNode, sourceFile: ts.SourceFile): string {
-  return typeNode.literal.getText(sourceFile)
+  const rawValue = typeNode.literal.getText(sourceFile)
+  const jsonValue = rawValue.replace(/^["']|["']$/g, '"')  // Make sure it's double quoted so it's valid JSON
+  try {
+    return JSON.parse(jsonValue)
+  } catch {
+    return rawValue
+  }
 }
 
 function buildPropType(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropType {
@@ -82,15 +153,23 @@ function buildPropType(typeNode: ts.TypeNode, sourceFile: ts.SourceFile): PropTy
     return { kind: 'object', syntax, properties }
   }
 
-  // Handle type references (might resolve to object/function/etc)
+  // Handle type references (might resolve to object/function/union/etc)
   if (ts.isTypeReferenceNode(typeNode)) {
     const typeName = typeNode.typeName.getText(sourceFile)
     const typeDecl = findTypeDeclaration(sourceFile, typeName)
 
     if (typeDecl) {
-      const properties = extractPropertiesFromDeclaration(typeDecl, sourceFile)
-      if (properties.length > 0) {
-        return { kind: 'object', syntax, properties }
+      // If it's a type alias, recursively build the type from the underlying type
+      if (ts.isTypeAliasDeclaration(typeDecl) && typeDecl.type) {
+        return buildPropType(typeDecl.type, sourceFile)
+      }
+
+      // If it's an interface, extract properties
+      if (ts.isInterfaceDeclaration(typeDecl)) {
+        const properties = extractPropertiesFromDeclaration(typeDecl, sourceFile)
+        if (properties.length > 0) {
+          return { kind: 'object', syntax, properties }
+        }
       }
     }
   }

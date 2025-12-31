@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert'
-import { extractPropsFromSource, extractPropsFromFile } from './extractProps.js'
+import { extractPropsFromSource, extractPropsFromFile, getDiscriminatedUnionInfo } from './extractProps.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -474,11 +474,11 @@ export default ({ status }: Props) => <div>{status}</div>
       assert.strictEqual(props[0].type.types.length, 2)
       assert.strictEqual(props[0].type.types[0].kind, 'constant')
       if (props[0].type.types[0].kind === 'constant') {
-        assert.strictEqual(props[0].type.types[0].value, "'active'")
+        assert.strictEqual(props[0].type.types[0].value, 'active')
       }
       assert.strictEqual(props[0].type.types[1].kind, 'constant')
       if (props[0].type.types[1].kind === 'constant') {
-        assert.strictEqual(props[0].type.types[1].value, "'inactive'")
+        assert.strictEqual(props[0].type.types[1].value, 'inactive')
       }
     }
     assert.strictEqual(props[1].name, 'count')
@@ -601,6 +601,122 @@ export default ({ coordinate }: Props) => <div>{coordinate}</div>
       assert.strictEqual(props[1].type.types[0].syntax, 'string')
       assert.strictEqual(props[1].type.types[1].syntax, 'number')
       assert.strictEqual(props[1].type.types[2].syntax, 'boolean')
+    }
+  })
+
+  test('extracts Date type', () => {
+    const source = `
+export interface Props {
+  createdAt: Date
+  updatedAt?: Date
+}
+
+export default ({ createdAt }: Props) => <div>{createdAt.toString()}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 2)
+    assert.strictEqual(props[0].name, 'createdAt')
+    assert.strictEqual(props[0].type.kind, 'primitive')
+    assert.strictEqual(props[0].type.syntax, 'Date')
+    assert.strictEqual(props[0].optional, false)
+    assert.strictEqual(props[1].name, 'updatedAt')
+    assert.strictEqual(props[1].type.kind, 'primitive')
+    assert.strictEqual(props[1].type.syntax, 'Date')
+    assert.strictEqual(props[1].optional, true)
+  })
+
+  test('detects discriminated union with getDiscriminatedUnionInfo', () => {
+    const source = `
+export interface Props {
+  action: { type: 'create'; name: string } | { type: 'delete'; id: number }
+}
+
+export default ({ action }: Props) => <div>{action.type}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props[0].name, 'action')
+    assert.strictEqual(props[0].type.kind, 'union')
+
+    // Test the getDiscriminatedUnionInfo helper
+    if (props[0].type.kind === 'union') {
+      const info = getDiscriminatedUnionInfo(props[0].type)
+      assert.notStrictEqual(info, null)
+
+      if (info) {
+        assert.strictEqual(info.discriminator, 'type')
+        assert.strictEqual(info.cases.length, 2)
+
+        // First case: { type: 'create'; name: string }
+        assert.strictEqual(info.cases[0].discriminatorValue, 'create')
+        assert.strictEqual(info.cases[0].properties.length, 1)
+        assert.strictEqual(info.cases[0].properties[0].name, 'name')
+        assert.strictEqual(info.cases[0].properties[0].type.syntax, 'string')
+
+        // Second case: { type: 'delete'; id: number }
+        assert.strictEqual(info.cases[1].discriminatorValue, 'delete')
+        assert.strictEqual(info.cases[1].properties.length, 1)
+        assert.strictEqual(info.cases[1].properties[0].name, 'id')
+        assert.strictEqual(info.cases[1].properties[0].type.syntax, 'number')
+      }
+    }
+  })
+
+  test('detects discriminated union from separate interfaces (MessageContent pattern)', () => {
+    const source = `
+export interface RichTextContent {
+  type: 'richtext'
+  html: string
+}
+
+export interface FileAttachmentContent {
+  type: 'file'
+  fileName: string
+  fileSize: number
+}
+
+export type MessageContent = RichTextContent | FileAttachmentContent
+
+export interface Props {
+  content: MessageContent
+}
+
+export default ({ content }: Props) => <div>{content.type}</div>
+`
+
+    const props = extractPropsFromSource(source)
+
+    assert.strictEqual(props.length, 1)
+    assert.strictEqual(props[0].name, 'content')
+    assert.strictEqual(props[0].type.kind, 'union')
+
+    // Test the getDiscriminatedUnionInfo helper
+    if (props[0].type.kind === 'union') {
+      const info = getDiscriminatedUnionInfo(props[0].type)
+      assert.notStrictEqual(info, null, 'Should detect discriminated union from separate interfaces')
+
+      if (info) {
+        assert.strictEqual(info.discriminator, 'type')
+        assert.strictEqual(info.cases.length, 2)
+
+        // First case: RichTextContent
+        assert.strictEqual(info.cases[0].discriminatorValue, 'richtext')
+        assert.strictEqual(info.cases[0].properties.length, 1)
+        assert.strictEqual(info.cases[0].properties[0].name, 'html')
+        assert.strictEqual(info.cases[0].properties[0].type.syntax, 'string')
+
+        // Second case: FileAttachmentContent
+        assert.strictEqual(info.cases[1].discriminatorValue, 'file')
+        assert.strictEqual(info.cases[1].properties.length, 2)
+        assert.strictEqual(info.cases[1].properties[0].name, 'fileName')
+        assert.strictEqual(info.cases[1].properties[0].type.syntax, 'string')
+        assert.strictEqual(info.cases[1].properties[1].name, 'fileSize')
+        assert.strictEqual(info.cases[1].properties[1].type.syntax, 'number')
+      }
     }
   })
 })

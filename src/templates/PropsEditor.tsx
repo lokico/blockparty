@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { PropDefinition, PropType } from '../extractProps.js'
+import type { PropDefinition, PropType, DiscriminatedUnionInfo } from '../extractProps.js'
+import { getDiscriminatedUnionInfo } from '../extractProps.js'
 
 interface ReactNodeValue {
   __block: string  // Block name
@@ -47,7 +48,7 @@ const parseConstantUnion = (propType: PropType): string[] => {
   if (propType.kind !== 'union') return []
   return propType.types
     .filter((t): t is Extract<PropType, { kind: 'constant' }> => t.kind === 'constant')
-    .map(t => t.value.replace(/^["']|["']$/g, ''))  // Remove quotes from strings
+    .map(t => t.value)
 }
 
 const getDefaultValue = (propType: PropType, optional: boolean): string => {
@@ -336,6 +337,43 @@ function RichEditor({ propType, value, onChange, availableBlocks = [] }: RichEdi
     )
   }
 
+  // Discriminated union type - show dropdown for discriminator + props editor for selected case
+  const discriminatedUnionInfo = getDiscriminatedUnionInfo(propType)
+  if (discriminatedUnionInfo) {
+    return (
+      <DiscriminatedUnionEditor
+        value={value}
+        onChange={(v) => onChange(v, false)}
+        discriminatedUnionInfo={discriminatedUnionInfo}
+        availableBlocks={availableBlocks}
+      />
+    )
+  }
+
+  // Union of literals - show dropdown
+  if (isConstantUnion(propType)) {
+    const options = parseConstantUnion(propType)
+    const currentValue = typeof parsedValue === 'string' ? parsedValue : String(parsedValue)
+
+    return (
+      <select
+        value={currentValue || options[0] || ''}
+        onChange={(e) => onChange(e.target.value, false)}
+        style={{
+          width: '100%',
+          padding: '4px 6px',
+          border: '1px solid #ddd',
+          borderRadius: '3px',
+          fontSize: '12px'
+        }}
+      >
+        {options.map(option => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    )
+  }
+
   // Object type - show rich editor if we have property definitions
   if (propType.kind === 'object' && propType.properties.length > 0) {
     return (
@@ -602,6 +640,108 @@ function ReactNodeEditor({ value, onChange, optional, availableBlocks }: ReactNo
   )
 }
 
+interface DiscriminatedUnionEditorProps {
+  value: string
+  onChange: (value: string) => void
+  discriminatedUnionInfo: DiscriminatedUnionInfo
+  availableBlocks?: RuntimeBlockInfo[]
+}
+
+function DiscriminatedUnionEditor({ value, onChange, discriminatedUnionInfo, availableBlocks = [] }: DiscriminatedUnionEditorProps) {
+  // Parse the current value
+  let parsedValue: Record<string, any>
+  try {
+    parsedValue = value ? JSON.parse(value) : {}
+  } catch {
+    parsedValue = {}
+  }
+
+  const { discriminator, cases } = discriminatedUnionInfo
+
+  // Get current discriminator value from the object
+  const currentDiscriminatorValue = parsedValue[discriminator] || cases[0]?.discriminatorValue || ''
+
+  // Find the case for the current discriminator value
+  const currentCase = cases.find(c => c.discriminatorValue === currentDiscriminatorValue)
+
+  // Handle discriminator change
+  const handleDiscriminatorChange = (newDiscriminatorValue: string) => {
+    // Reset the object to just have the discriminator
+    const newObj = { [discriminator]: newDiscriminatorValue }
+    onChange(JSON.stringify(newObj))
+  }
+
+  // Handle property change
+  const updateField = (fieldName: string, fieldValue: any) => {
+    const newObj = { ...parsedValue, [fieldName]: fieldValue }
+    onChange(JSON.stringify(newObj))
+  }
+
+  return (
+    <div style={{
+      border: '1px solid #ddd',
+      borderRadius: '4px',
+      padding: '8px',
+      background: '#fafafa',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px'
+    }}>
+      {/* Discriminator dropdown */}
+      <div>
+        <label style={{ display: 'block', fontSize: '11px', marginBottom: '2px', fontWeight: 500 }}>
+          {discriminator} *
+        </label>
+        <select
+          value={currentDiscriminatorValue}
+          onChange={(e) => handleDiscriminatorChange(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '4px 6px',
+            border: '1px solid #ddd',
+            borderRadius: '3px',
+            fontSize: '12px'
+          }}
+        >
+          {cases.map(c => (
+            <option key={c.discriminatorValue} value={c.discriminatorValue}>
+              {c.discriminatorValue}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Properties for selected case */}
+      {currentCase && currentCase.properties.length > 0 && (
+        <>
+          <div style={{ borderTop: '1px solid #ddd', margin: '4px 0' }} />
+          {currentCase.properties.map(prop => (
+            <div key={prop.name}>
+              <label style={{ display: 'block', fontSize: '11px', marginBottom: '2px', fontWeight: 500 }}>
+                {prop.name}{prop.optional ? '' : ' *'}
+                <span style={{ color: '#999', fontWeight: 'normal', marginLeft: '4px' }}>
+                  {prop.type.syntax}
+                </span>
+              </label>
+              {prop.description && (
+                <div style={{ fontSize: '10px', color: '#666', marginBottom: '2px', fontStyle: 'italic' }}>
+                  {prop.description}
+                </div>
+              )}
+              <ItemEditor
+                propDef={prop}
+                value={parsedValue[prop.name]}
+                onChange={(newValue) => updateField(prop.name, newValue)}
+                availableBlocks={availableBlocks}
+              />
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  )
+}
+
 interface FunctionEditorProps {
   parameters: PropDefinition[]
   value: string
@@ -681,6 +821,43 @@ function ItemEditor({ value, onChange, propDef, availableBlocks = [] }: ItemEdit
     )
   }
 
+  // For arrays, tuples, and other complex types, use RichEditor
+  if (type.kind === 'array' || type.kind === 'tuple') {
+    return (
+      <RichEditor
+        propType={type}
+        value={typeof value === 'string' ? value : JSON.stringify(value)}
+        onChange={(newValue) => {
+          try {
+            onChange(JSON.parse(newValue))
+          } catch {
+            onChange(newValue)
+          }
+        }}
+        availableBlocks={availableBlocks}
+      />
+    )
+  }
+
+  // For discriminated unions, show discriminated union editor
+  const discriminatedUnionInfo = getDiscriminatedUnionInfo(type)
+  if (discriminatedUnionInfo) {
+    return (
+      <DiscriminatedUnionEditor
+        value={typeof value === 'string' ? value : JSON.stringify(value)}
+        onChange={(newValue) => {
+          try {
+            onChange(JSON.parse(newValue))
+          } catch {
+            onChange(newValue)
+          }
+        }}
+        discriminatedUnionInfo={discriminatedUnionInfo}
+        availableBlocks={availableBlocks}
+      />
+    )
+  }
+
   // For constant unions, show dropdown
   if (isConstantUnion(type)) {
     const options = parseConstantUnion(type)
@@ -701,6 +878,24 @@ function ItemEditor({ value, onChange, propDef, availableBlocks = [] }: ItemEdit
           <option key={option} value={option}>{option}</option>
         ))}
       </select>
+    )
+  }
+
+  // For Date type
+  if (type.syntax === 'Date') {
+    return (
+      <input
+        type="datetime-local"
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: '100%',
+          padding: '4px 6px',
+          border: '1px solid #ddd',
+          borderRadius: '3px',
+          fontSize: '12px'
+        }}
+      />
     )
   }
 
