@@ -481,6 +481,129 @@ function findFunctionDeclaration(sourceFile: ts.SourceFile, name: string): ts.Fu
   return result
 }
 
+export interface ComponentExport {
+  name: string
+  isDefaultExport: boolean
+  propDefinitions: PropDefinition[]
+}
+
+function isJsxReturnType(typeText: string): boolean {
+  return /\b(JSX\.Element|React\.ReactElement|ReactElement)\b/.test(typeText)
+}
+
+function isReactComponentFunction(
+  func: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression,
+  name: string,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker
+): boolean {
+  if (!/^[A-Z]/.test(name)) return false
+
+  if (func.type && isJsxReturnType(func.type.getText(sourceFile))) return true
+
+  try {
+    const signature = typeChecker.getSignatureFromDeclaration(func)
+    if (signature) {
+      const returnType = typeChecker.getReturnTypeOfSignature(signature)
+      if (isJsxReturnType(typeChecker.typeToString(returnType))) return true
+      // typeToString sometimes returns bare "Element" — check fully qualified name
+      const symbol = returnType.getSymbol()
+      if (symbol && isJsxReturnType(typeChecker.getFullyQualifiedName(symbol))) return true
+    }
+  } catch {
+    // ignore type checker errors
+  }
+
+  return false
+}
+
+function extractPropsFromFunctionNode(
+  func: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression,
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker
+): PropDefinition[] {
+  if (!func.parameters || func.parameters.length === 0) return []
+  const firstParam = func.parameters[0]
+  if (!firstParam.type) return []
+  return extractPropertiesFromTypeNode(firstParam.type, sourceFile, typeChecker)
+}
+
+function extractReactComponentsFromSourceFile(
+  sourceFile: ts.SourceFile,
+  typeChecker: ts.TypeChecker
+): ComponentExport[] {
+  const components: ComponentExport[] = []
+
+  ts.forEachChild(sourceFile, node => {
+    // export function MyComponent(...) and export default function MyComponent(...)
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      const hasExport = node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)
+      if (hasExport) {
+        const name = node.name.text
+        const isDefaultExport = !!node.modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword)
+        if (isReactComponentFunction(node, name, sourceFile, typeChecker)) {
+          components.push({ name, isDefaultExport, propDefinitions: extractPropsFromFunctionNode(node, sourceFile, typeChecker) })
+        }
+      }
+    }
+
+    // export const MyComponent = (...) => ...
+    if (ts.isVariableStatement(node)) {
+      const hasExport = node.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)
+      if (hasExport) {
+        for (const decl of node.declarationList.declarations) {
+          if (
+            ts.isIdentifier(decl.name) &&
+            decl.initializer &&
+            (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))
+          ) {
+            const name = decl.name.text
+            if (isReactComponentFunction(decl.initializer, name, sourceFile, typeChecker)) {
+              components.push({ name, isDefaultExport: false, propDefinitions: extractPropsFromFunctionNode(decl.initializer, sourceFile, typeChecker) })
+            }
+          }
+        }
+      }
+    }
+
+    // export default MyComponent (identifier re-export, not already captured above)
+    if (ts.isExportAssignment(node) && !node.isExportEquals && ts.isIdentifier(node.expression)) {
+      const name = node.expression.text
+      if (/^[A-Z]/.test(name) && !components.some(c => c.name === name)) {
+        const funcDecl = findFunctionDeclaration(sourceFile, name)
+        if (funcDecl && isReactComponentFunction(funcDecl, name, sourceFile, typeChecker)) {
+          components.push({ name, isDefaultExport: true, propDefinitions: extractPropsFromFunctionNode(funcDecl, sourceFile, typeChecker) })
+        }
+      }
+    }
+  })
+
+  return components
+}
+
+export async function extractReactComponentsFromFile(filePath: string): Promise<ComponentExport[]> {
+  try {
+    const program = ts.createProgram([filePath], {
+      target: ts.ScriptTarget.Latest,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      jsx: ts.JsxEmit.React,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      noEmit: true,
+      allowImportingTsExtensions: true,
+    })
+
+    const sourceFile = program.getSourceFile(filePath)
+    if (!sourceFile) return []
+
+    return extractReactComponentsFromSourceFile(sourceFile, program.getTypeChecker())
+  } catch (error) {
+    console.error(`Error extracting React components from ${filePath}:`, error)
+    return []
+  }
+}
+
 export async function extractPropsFromFile(filePath: string): Promise<PropDefinition[]> {
   try {
     // Create a TypeScript program to resolve imports

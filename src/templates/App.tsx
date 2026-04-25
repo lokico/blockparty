@@ -183,7 +183,8 @@ export function App() {
   const [selectedBlock, setSelectedBlock] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
-      return saved ? JSON.parse(saved).selectedBlock ?? 0 : 0
+      const v = saved ? JSON.parse(saved).selectedBlock ?? 0 : 0
+      return blocks[v] ? v : 0
     } catch {
       return 0
     }

@@ -8,17 +8,33 @@ Easy, zero-config, convention-based React components.
 
 A component in Block Party is called a Block. Here is a simple Block:
 
-```typescript
-export interface Props {
-	who: string
+```tsx
+export function Hello({ who }: { who: string }) {
+  return <h1>Hello, {who}!</h1>
 }
-
-export default ({ who }: Props) => (
-	<h1>Hello, {who}!</h1>
-)
 ```
 
-Create a new directory and paste the above into a file called `index.tsx`. You've just created your first Block!
+Paste the above into any `.tsx` file and you've just created your first Block! Block Party will find any exported function component whose name starts with a capital letter and returns JSX — no special file naming required.
+
+A single file can contain multiple Blocks:
+
+```tsx
+export function Hello({ who }: { who: string }) {
+  return <h1>Hello, {who}!</h1>
+}
+
+export function Goodbye({ who }: { who: string }) {
+  return <h1>Goodbye, {who}!</h1>
+}
+```
+
+Default exports work too:
+
+```tsx
+export default function Hello({ who }: { who: string }) {
+  return <h1>Hello, {who}!</h1>
+}
+```
 
 ## Storybook
 
@@ -26,7 +42,7 @@ Create a new directory and paste the above into a file called `index.tsx`. You'v
 
 Block Party includes a storybook-style UI for quick previews of your Blocks.
 
-Just run `npx blockparty` from the directory containing your Block, or from a root directory, where each Block is in a different subdirectory. The preview will automatically update if changes are made to any of the Blocks' source code.
+Just run `npx blockparty` from the directory containing your `.tsx` files, or from a root directory to search recursively. The preview will automatically update if changes are made to any of the Blocks' source code.
 
 ### Publish the Storybook
 
@@ -42,7 +58,7 @@ npx blockparty build . docs
 
 ## Metadata
 
-If the Block has a `README.md` file in its directory, frontmatter can be added to the beginning of the file to provide metadata:
+If a directory contains a file named `index.tsx`, a `README.md` in the same directory can provide metadata for the Blocks in that file. Frontmatter can be added to the beginning of the README:
 
 ```markdown
 ---
@@ -83,42 +99,31 @@ The name and description are displayed in the storybook UI.
 
 You can add JSDoc comments to your props to provide helpful descriptions in the storybook UI:
 
-```typescript
-export interface Props {
-  /**
-   * The person's name to greet
-   */
+```tsx
+interface Props {
+  /** The person's name to greet */
   who: string
-
-  /**
-   * Optional greeting message (default: 'Hello')
-   */
+  /** Optional greeting message (default: 'Hello') */
   greeting?: string
 }
 
-export default ({ who, greeting = 'Hello' }: Props) => (
-  <h1>{greeting}, {who}!</h1>
-)
+export function Hello({ who, greeting = 'Hello' }: Props) {
+  return <h1>{greeting}, {who}!</h1>
+}
 ```
 
 ## Styling
 
 The easiest way to style your Block is to just put styles right in the code:
 
-```typescript
-export interface Props {
-  // .. snip ..
-}
-
-export default ({ who, greeting = 'Hello' }: Props) => {
+```tsx
+export function Hello({ who, greeting = 'Hello' }: { who: string, greeting?: string }) {
   const headingStyle: React.CSSProperties = {
     fontSize: '24px',
     color: '#111827',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
   }
-  return (
-    <h1 style={headingStyle}>{greeting}, {who}!</h1>
-  )
+  return <h1 style={headingStyle}>{greeting}, {who}!</h1>
 }
 ```
 
@@ -134,17 +139,11 @@ You can also use a CSS module, which is a CSS file ending in `.module.css`.
 
 For instance, if you name the above `styles.module.css`, you can import it in your code like so:
 
-```typescript
+```tsx
 import styles from './styles.module.css'
 
-export interface Props {
-  // .. snip ..
-}
-
-export default ({ who, greeting = 'Hello' }: Props) => {
-  return (
-    <h1 className={styles.heading}>{greeting}, {who}!</h1>
-  )
+export function Hello({ who, greeting = 'Hello' }: { who: string, greeting?: string }) {
+  return <h1 className={styles.heading}>{greeting}, {who}!</h1>
 }
 ```
 

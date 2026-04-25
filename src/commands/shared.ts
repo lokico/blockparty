@@ -6,9 +6,11 @@ export async function discoverBlocksAndGenerateModule(targetPath: string): Promi
 
   if (blocks.length === 0) {
     console.error('❌ No Blocks found!')
-    console.error('A Block should have an index.ts or index.tsx file with:')
-    console.error('  - An exported Props interface')
-    console.error('  - A default exported function component that accepts the Props')
+    console.error('A Block is any exported function component in a .tsx file whose name starts with a capital letter and returns JSX.')
+    console.error('Example:')
+    console.error('  export function MyBlock({ title }: { title: string }) {')
+    console.error('    return <div>{title}</div>')
+    console.error('  }')
     process.exit(1)
   }
 

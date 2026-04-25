@@ -1,8 +1,10 @@
-import { test, describe } from 'node:test'
+import { test, describe, after } from 'node:test'
 import assert from 'node:assert'
-import { extractPropsFromSource, extractPropsFromFile, getDiscriminatedUnionInfo } from './extractProps.js'
+import { extractPropsFromSource, extractPropsFromFile, extractReactComponentsFromFile, getDiscriminatedUnionInfo } from './extractProps.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -718,5 +720,116 @@ export default ({ content }: Props) => <div>{content.type}</div>
         assert.strictEqual(info.cases[1].properties[1].type.syntax, 'number')
       }
     }
+  })
+})
+
+describe('extractReactComponentsFromFile', () => {
+  const tempDirs: string[] = []
+
+  async function makeTempFile(name: string, content: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'bp-extract-test-'))
+    tempDirs.push(dir)
+    const filePath = join(dir, name)
+    await writeFile(filePath, content)
+    return filePath
+  }
+
+  after(async () => {
+    await Promise.all(tempDirs.map(d => rm(d, { recursive: true, force: true })))
+  })
+
+  test('detects named export function with explicit return type', async () => {
+    const filePath = await makeTempFile('Button.tsx',
+      `export function Button({ label }: { label: string }): JSX.Element { return <div>{label}</div> }`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'Button')
+    assert.strictEqual(components[0].isDefaultExport, false)
+    assert.strictEqual(components[0].propDefinitions.length, 1)
+    assert.strictEqual(components[0].propDefinitions[0].name, 'label')
+  })
+
+  test('detects named export const arrow function', async () => {
+    const filePath = await makeTempFile('Card.tsx',
+      `export const Card = ({ title }: { title: string }): JSX.Element => <div>{title}</div>`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'Card')
+    assert.strictEqual(components[0].isDefaultExport, false)
+  })
+
+  test('detects default export function declaration with explicit return type', async () => {
+    const filePath = await makeTempFile('Widget.tsx',
+      `export default function Widget({ id }: { id: number }): JSX.Element { return <div/> }`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'Widget')
+    assert.strictEqual(components[0].isDefaultExport, true)
+  })
+
+  test('detects export default identifier pattern', async () => {
+    const filePath = await makeTempFile('Panel.tsx', `
+function Panel({ open }: { open: boolean }): JSX.Element { return <div/> }
+export default Panel
+`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'Panel')
+    assert.strictEqual(components[0].isDefaultExport, true)
+  })
+
+  test('detects multiple exported components in one file', async () => {
+    const filePath = await makeTempFile('UI.tsx', `
+export function Button(): JSX.Element { return <button/> }
+export function Input(): JSX.Element { return <input/> }
+`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 2)
+    assert.strictEqual(components[0].name, 'Button')
+    assert.strictEqual(components[1].name, 'Input')
+  })
+
+  test('deduplicates when component is both named and default export', async () => {
+    const filePath = await makeTempFile('Shared.tsx', `
+export function Shared(): JSX.Element { return <div/> }
+export default Shared
+`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'Shared')
+  })
+
+  test('excludes exports whose names start with lowercase', async () => {
+    const filePath = await makeTempFile('utils.tsx',
+      `export function helper(): JSX.Element { return <div/> }`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 0)
+  })
+
+  test('excludes exported functions that do not return JSX', async () => {
+    const filePath = await makeTempFile('utils.tsx', `
+export function Helper(): string { return 'hello' }
+export function FormatDate(): number { return 42 }
+`)
+    const components = await extractReactComponentsFromFile(filePath)
+    assert.strictEqual(components.length, 0)
+  })
+
+  test('detects default export with no return type annotation via type checker', async () => {
+    const fixturePath = join(__dirname, '..', 'src', '__test-fixtures__', 'DefaultNoAnnotation.tsx')
+    const components = await extractReactComponentsFromFile(fixturePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'DefaultWidget')
+    assert.strictEqual(components[0].isDefaultExport, true)
+    assert.strictEqual(components[0].propDefinitions[0].name, 'label')
+  })
+
+  test('detects named export with no return type annotation via type checker', async () => {
+    const fixturePath = join(__dirname, '..', 'src', '__test-fixtures__', 'NamedNoAnnotation.tsx')
+    const components = await extractReactComponentsFromFile(fixturePath)
+    assert.strictEqual(components.length, 1)
+    assert.strictEqual(components[0].name, 'NamedWidget')
+    assert.strictEqual(components[0].isDefaultExport, false)
+    assert.strictEqual(components[0].propDefinitions[0].name, 'title')
   })
 })
